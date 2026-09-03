@@ -16,6 +16,7 @@
  */
 
 import { el, icon, toast, mmss, humanBytes, drawCaps } from './ui.js'
+import { watchSources } from './watch.js'
 import { state, storeRecording, setPhase, elapsed, go, refreshView } from './app.js'
 
 /** Best first; the first the engine admits to supporting wins. */
@@ -141,12 +142,18 @@ export function mountRecord({ root, api }) {
     const kinds = state.settings.recordSource === 'window' ? ['window'] : ['screen']
     sources.replaceChildren(el('p.sub', { text: 'Looking…', style: { gridColumn: '1 / -1' } }))
     const found = await api.shot.sources(kinds)
+    watcher.prime(found)
+    paintSources(found)
+  }
+
+  function paintSources(found) {
     if (!found.length) {
       sources.replaceChildren(el('div.empty', { style: { gridColumn: '1 / -1' } }, [
         el('span.glyph', {}, [icon('window')]), el('b', { text: 'Nothing to record' })
       ]))
       return
     }
+    // The selection survives a repaint if what it points at is still open.
     if (!chosen || !found.some((s) => s.id === chosen)) chosen = found[0].id
     sources.replaceChildren(...found.map((source) => {
       const tile = el('button.source', {
@@ -318,6 +325,10 @@ export function mountRecord({ root, api }) {
 
     setPhase('busy')
     try {
+      // The keyboard is watched for the take, not for the life of the app —
+      // armed here so the strip is live from the first frame, and disarmed in
+      // `finish` however the take ends.
+      if (state.settings.keypress) await api.keys.recording(true)
       stream = await openStream(chosen)
       const track = stream.getVideoTracks()[0]
       const trackSettings = track.getSettings()
@@ -377,6 +388,7 @@ export function mountRecord({ root, api }) {
       startMeter()
     } catch (err) {
       cleanup()
+      await api.keys.recording(false)
       await api.count.hide()
       await api.app.comeBack()
       setPhase('ready')
@@ -415,6 +427,9 @@ export function mountRecord({ root, api }) {
 
   async function finish() {
     const durationMs = elapsed()
+    // Stops the hook when the default 'recording' mode is in force; a no-op
+    // when the user has asked for it always.
+    await api.keys.recording(false)
     const blob = new Blob(chunks, { type: container?.mimeType || 'video/webm' })
     chunks = []
     cleanup()
@@ -586,10 +601,27 @@ export function mountRecord({ root, api }) {
   }
 
   let paintTicker = 0
+  /**
+   * Repaint when a window the picker is offering disappears.
+   *
+   * Only the tiles change — the chosen source is kept if it is still there, so
+   * a background window closing does not move the user's selection.
+   */
+  const watcher = watchSources({
+    fetch: () => api.shot.sources(state.settings.recordSource === 'window' ? ['window'] : ['screen']),
+    onChange: (found) => {
+      // Never mid-take: the enumeration is work taken from the recorder, and
+      // the source cannot be changed once a stream is open anyway.
+      if (state.phase !== 'ready') return
+      paintSources(found)
+    }
+  })
+
   return {
     async enter() {
       paint()
       await loadSources()
+      watcher.start()
       // The button carries a live clock while recording, and the view can be
       // opened mid-take.
       clearInterval(paintTicker)

@@ -349,3 +349,158 @@ export async function markCursor(bytes, cursor, { color = '#06B6D4', size = 'md'
   const blob = await canvas.convertToBlob({ type: 'image/png' })
   return new Uint8Array(await blob.arrayBuffer())
 }
+
+/* ────────────────────────────────────────────────────────────── confirming */
+
+/**
+ * Ask before something irreversible.
+ *
+ * This replaces an arm-then-click-again button that turned into
+ * "Delete — sure?" in place. That pattern has two problems: the second click
+ * lands on the same pixels as the first, so a double-click deletes without ever
+ * showing the question; and a button that rewrites itself is easy to miss
+ * entirely when your eyes are on the thing you are about to lose.
+ *
+ * A dialog moves the confirm away from where the pointer already is, names what
+ * will happen, and gives Escape as an answer.
+ *
+ * Focus starts on Cancel. For a destructive question the safe answer is the one
+ * a stray Return should pick.
+ *
+ * @returns {Promise<boolean>}
+ */
+export function confirm({
+  title,
+  body,
+  action = 'Delete',
+  tone = 'bad',
+  glyph = 'trash'
+} = {}) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (answer) => {
+      if (done) return
+      done = true
+      removeEventListener('keydown', onKey, true)
+      scrim.classList.add('leaving')
+      scrim.addEventListener('animationend', () => scrim.remove(), { once: true })
+      // A dialog whose exit animation never fires would otherwise stay forever.
+      setTimeout(() => scrim.remove(), 400)
+      resolve(answer)
+    }
+
+    const cancel = el('button.btn', { type: 'button', text: 'Cancel', onClick: () => finish(false) })
+    const go = el(`button.btn.confirm-go.${tone}`, {
+      type: 'button', onClick: () => finish(true)
+    }, [icon(glyph), action])
+
+    const card = el('div.confirm', { role: 'alertdialog', 'aria-modal': 'true' }, [
+      el(`span.confirm-glyph.${tone}`, {}, [icon(glyph)]),
+      el('h2', { text: title }),
+      body ? el('p', { text: body }) : null,
+      el('div.confirm-row', {}, [cancel, go])
+    ])
+
+    const scrim = el('div.scrim', {
+      // A click on the backdrop is a cancel; one that started inside the card
+      // and drifted out is not.
+      onMousedown: (event) => { if (event.target === scrim) finish(false) }
+    }, [card])
+
+    const onKey = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(false) }
+      // Return confirms only from the action itself, which focus does not start
+      // on — so it takes a deliberate Tab to get there.
+      if (event.key === 'Tab') {
+        const stops = [cancel, go]
+        const next = stops[(stops.indexOf(document.activeElement) + (event.shiftKey ? -1 : 1) + 2) % 2]
+        event.preventDefault()
+        next.focus()
+      }
+    }
+    addEventListener('keydown', onKey, true)
+
+    document.body.append(scrim)
+    cancel.focus()
+  })
+}
+
+/**
+ * Ask for a value.
+ *
+ * The sibling of `confirm`, and it exists for the same reason: three things the
+ * exports print — a session's name, its notes and a step's title — were written
+ * by the app and editable by nobody. A capture titled from the window it came
+ * from is a reasonable guess, not a caption somebody chose, and it is what ends
+ * up as the heading on a PDF page handed to a colleague.
+ *
+ * Resolves with the trimmed string, or null if cancelled. An empty answer is a
+ * legitimate one — it clears the field back to the app's own naming.
+ *
+ * @returns {Promise<string|null>}
+ */
+export function promptFor({
+  title,
+  body,
+  label,
+  value = '',
+  placeholder = '',
+  action = 'Save',
+  multiline = false,
+  maxLength = 400
+} = {}) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (answer) => {
+      if (done) return
+      done = true
+      removeEventListener('keydown', onKey, true)
+      scrim.classList.add('leaving')
+      scrim.addEventListener('animationend', () => scrim.remove(), { once: true })
+      setTimeout(() => scrim.remove(), 400)
+      resolve(answer)
+    }
+
+    const field = el(multiline ? 'textarea' : 'input', {
+      class: multiline ? 'input area' : 'input',
+      value,
+      placeholder,
+      maxLength,
+      spellcheck: multiline,
+      'aria-label': label || title
+    })
+
+    const cancel = el('button.btn', { type: 'button', text: 'Cancel', onClick: () => finish(null) })
+    const save = el('button.btn.confirm-go.go', {
+      type: 'button', text: action, onClick: () => finish(field.value.trim())
+    })
+
+    const card = el('div.confirm.ask', { role: 'dialog', 'aria-modal': 'true' }, [
+      el('h2', { text: title }),
+      body ? el('p', { text: body }) : null,
+      el('label.field', {}, [label ? el('span.lab', { text: label }) : null, field]),
+      el('div.confirm-row', {}, [cancel, save])
+    ])
+
+    const scrim = el('div.scrim', {
+      onMousedown: (event) => { if (event.target === scrim) finish(null) }
+    }, [card])
+
+    const onKey = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(null); return }
+      // Return saves from a single-line field, the way every rename box does.
+      // In a textarea it has to insert a newline, so the button is the only way.
+      if (event.key === 'Enter' && !multiline && document.activeElement === field) {
+        event.preventDefault()
+        finish(field.value.trim())
+      }
+    }
+    addEventListener('keydown', onKey, true)
+
+    document.body.append(scrim)
+    field.focus()
+    // Selected, not just focused: a rename usually replaces the name rather
+    // than appending to it.
+    if (!multiline) field.select()
+  })
+}

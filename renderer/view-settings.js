@@ -136,6 +136,11 @@ const SECTIONS = [
           : null)
       },
       {
+        kind: 'seg', key: 'keypressWhen', label: 'Watch the keyboard', needs: 'keypress',
+        options: [['recording', 'Only while recording'], ['always', 'Whenever the app is open']],
+        sub: 'Only while recording is the default: the hook starts with a take and stops with it. Watching all the time is what puts keys into screenshots too, and means the keyboard is being read for as long as the app is running.'
+      },
+      {
         kind: 'corner', key: 'keypressPosition', label: 'Corner', needs: 'keypress',
         sub: 'Where the strip sits in the frame. It ends up in the picture, so keep it off whatever the capture is about.'
       },
@@ -266,7 +271,11 @@ export function mountSettings({ root, api }) {
     }, [label]))
     const seg = el('div.seg', { role: 'group', 'aria-label': row.label }, buttons)
     const node = el('div.row.stacked', { dataset: { row: row.key } }, [
-      el('span.body', {}, [el('span.label', { text: row.label }), seg])
+      el('span.body', {}, [
+        el('span.label', { text: row.label }),
+        row.sub ? el('span.sub', { text: row.sub, style: { marginBottom: '10px' } }) : null,
+        seg
+      ])
     ])
     node.__paint = (settings) => {
       for (const button of buttons) {

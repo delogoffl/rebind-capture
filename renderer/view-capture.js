@@ -10,6 +10,7 @@
  */
 
 import { el, icon, toast, humanBytes } from './ui.js'
+import { watchSources } from './watch.js'
 import { state, storeShot, setPhase, go, refreshView } from './app.js'
 
 export function mountCapture({ root, api }) {
@@ -154,6 +155,7 @@ export function mountCapture({ root, api }) {
     // A region is dragged out on whichever screen the pointer is on, so there
     // is nothing to pick — showing a picker here would imply otherwise.
     const key = mode === 'window' ? 'window' : 'screen'
+    watcher.prime(found)
     if (!chosen[key] || !found.some((s) => s.id === chosen[key])) chosen[key] = found[0].id
 
     sources.replaceChildren(...found.map((source) => {
@@ -266,10 +268,22 @@ export function mountCapture({ root, api }) {
       : 'No global shortcut is bound for this mode'
   }
 
+  /**
+   * Repaint when a window the picker is offering disappears.
+   *
+   * Only the tiles change — the chosen source is kept if it is still there, so
+   * a background window closing does not move the user's selection.
+   */
+  const watcher = watchSources({
+    fetch: () => api.shot.sources(state.settings.captureMode === 'window' ? ['window'] : ['screen']),
+    onChange: (found) => paintSources(found, state.settings.captureMode)
+  })
+
   return {
     async enter() {
       paint()
       await loadSources()
+      watcher.start()
     }
   }
 }

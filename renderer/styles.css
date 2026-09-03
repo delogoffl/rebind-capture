@@ -608,39 +608,101 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn.danger:hover:not(:disabled) { background: var(--rec-soft); border-color: var(--rec-line); }
 .btn.icon { padding: 9px; }
 
+/**
+ * The primary action.
+ *
+ * Simple, and premium by restraint rather than by effects. A two-stop gradient
+ * with a glow under it reads as a web hero button; the things that make a
+ * desktop action feel expensive are quieter than that.
+ *
+ *   One colour, lit from above. A near-flat surface with a 6% wash at the top,
+ *   not a gradient between two hues — a button that changes colour down its
+ *   height is a button pretending to be a light source.
+ *
+ *   A hairline of the light, not a halo. `inset 0 1px 0` along the top edge and
+ *   a matching darker line along the bottom is what a physical key looks like.
+ *   The shadow is tight and neutral, so the button sits on the bar rather than
+ *   hovering over it in coloured fog.
+ *
+ *   Motion in the shadow, not the geometry. Hover deepens the contact shadow
+ *   and lifts by half a pixel; press flattens both. Nothing translates far
+ *   enough to notice as movement, which is what makes it feel weighted.
+ */
 .cta {
   position: relative;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 11px;
-  height: 52px;
-  padding: 0 26px;
-  overflow: hidden;
-  font-size: 14.5px;
-  font-weight: 640;
-  letter-spacing: -.015em;
+  gap: 10px;
+  height: 50px;
+  padding: 0 24px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -.011em;
   color: #fff;
-  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .10), rgba(255, 255, 255, 0) 42%),
+    var(--accent);
   border: 0;
-  border-radius: 14px;
+  border-radius: 13px;
   cursor: pointer;
   white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 8px 24px -10px var(--accent-glow);
-  transition: box-shadow .18s var(--swift), transform .14s var(--ease), opacity .18s;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .28),
+    inset 0 -1px 0 rgba(0, 0, 0, .18),
+    0 1px 2px rgba(8, 12, 24, .30),
+    0 6px 16px -8px rgba(8, 12, 24, .55);
+  transition:
+    box-shadow .2s var(--swift),
+    transform .12s var(--ease),
+    filter .2s var(--swift),
+    opacity .18s;
 }
 .cta:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 14px 32px -10px var(--accent-glow);
+  transform: translateY(-.5px);
+  filter: brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .34),
+    inset 0 -1px 0 rgba(0, 0, 0, .18),
+    0 2px 4px rgba(8, 12, 24, .32),
+    0 10px 22px -10px rgba(8, 12, 24, .6);
 }
-.cta:active:not(:disabled) { transform: translateY(0); }
-.cta:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
-.cta svg { width: 18px; height: 18px; flex: none; }
-.cta .kbd { color: rgba(255, 255, 255, .94); background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .28); }
+.cta:active:not(:disabled) {
+  transform: translateY(.5px);
+  filter: brightness(.97);
+  /* Pressed: the top highlight goes, the contact shadow tightens to nothing. */
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, .22),
+    0 1px 1px rgba(8, 12, 24, .28);
+}
+.cta:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+  filter: saturate(.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12);
+}
+.cta svg { width: 17px; height: 17px; flex: none; opacity: .95; }
+
+/* The shortcut sits to the right as a quiet aside, separated by a hairline
+   rather than by a filled chip — a second filled shape inside a filled button
+   is one shape too many. */
+.cta .kbd {
+  height: 22px;
+  margin-left: 2px;
+  padding: 0 0 0 12px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, .72);
+  background: none;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 0;
+}
 
 .cta.rec {
-  background: linear-gradient(180deg, #FB7185, #E11D48);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .24), 0 8px 24px -10px rgba(244, 63, 94, .6);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .10), rgba(255, 255, 255, 0) 42%),
+    #E11D48;
 }
 .cta.rec.live {
   color: var(--rec-text);
@@ -1146,3 +1208,161 @@ button, input, select, textarea { font: inherit; color: inherit; }
     transition-duration: .001ms !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════ confirm ═══ */
+
+/**
+ * The question before something irreversible.
+ *
+ * Small, centred and close to the middle of attention rather than anchored to
+ * whatever was clicked — the point is to move the second click away from where
+ * the first one landed. The backdrop dims and blurs so the thing being deleted
+ * is still visible behind it, but plainly out of reach.
+ */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 6, 12, .58);
+  backdrop-filter: blur(6px) saturate(.9);
+  -webkit-backdrop-filter: blur(6px) saturate(.9);
+  animation: scrim-in .16s var(--swift);
+}
+.scrim.leaving { animation: scrim-out .14s var(--swift) forwards; }
+@keyframes scrim-in { from { opacity: 0; } }
+@keyframes scrim-out { to { opacity: 0; } }
+
+.confirm {
+  width: min(400px, calc(100vw - 48px));
+  padding: 24px;
+  text-align: center;
+  background: var(--overlay);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-xl);
+  box-shadow: var(--pop), var(--sheen-top);
+  animation: confirm-in .22s var(--spring);
+}
+.scrim.leaving .confirm { animation: none; }
+@keyframes confirm-in { from { opacity: 0; transform: translateY(8px) scale(.96); } }
+
+/* A tinted badge rather than a bare glyph — it carries the tone of the question
+   before a word of it has been read. */
+.confirm-glyph {
+  width: 46px; height: 46px;
+  display: grid; place-items: center;
+  margin: 0 auto 16px;
+  border-radius: 15px;
+}
+.confirm-glyph svg { width: 20px; height: 20px; }
+.confirm-glyph.bad { color: var(--rec-text); background: var(--rec-soft); box-shadow: inset 0 0 0 1px var(--rec-line); }
+.confirm-glyph.warn { color: var(--warn-text); background: var(--warn-soft); box-shadow: inset 0 0 0 1px var(--warn-line); }
+
+.confirm h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 620;
+  letter-spacing: -.02em;
+}
+.confirm p {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.confirm-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 22px; }
+.confirm-row .btn { justify-content: center; height: 40px; }
+
+.confirm-go.bad {
+  color: #fff;
+  background: var(--rec);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .24), 0 1px 2px rgba(8, 12, 24, .3);
+}
+.confirm-go.bad:hover:not(:disabled) { color: #fff; background: #E11D48; border-color: transparent; }
+
+/**
+ * The delete on a shot tile.
+ *
+ * Hidden until the tile is hovered or something in it has keyboard focus —
+ * a permanent control over every thumbnail is clutter on top of the picture the
+ * grid exists to show, but a gesture with nothing on screen to suggest it (this
+ * used to be alt-click) is not a feature anybody finds.
+ */
+.shot-del {
+  position: absolute;
+  right: 7px;
+  bottom: 40px;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  padding: 0;
+  opacity: 0;
+  color: #fff;
+  background: rgba(12, 16, 26, .82);
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 9px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: opacity .14s var(--swift), background .14s var(--swift), transform .14s var(--ease);
+}
+.shot:hover .shot-del,
+.shot:focus-within .shot-del { opacity: 1; }
+.shot-del:hover { background: var(--rec); border-color: transparent; transform: scale(1.06); }
+.shot-del svg { width: 13px; height: 13px; }
+
+/* The tile is a div with a button role now — a button cannot be nested in a
+   button — so it needs the affordances a button would have had. */
+.shot { -webkit-user-select: none; user-select: none; }
+.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A dialog that asks for a value rather than for a yes. Left-aligned, because
+   a form is read as a form and centred labels are hard to scan. */
+.confirm.ask { width: min(460px, calc(100vw - 48px)); text-align: left; }
+.confirm.ask h2 { font-size: 15.5px; }
+.confirm.ask p { margin-bottom: 18px; }
+.confirm.ask .field { margin: 0; }
+
+.input.area {
+  height: auto;
+  min-height: 104px;
+  padding: 11px 13px;
+  line-height: 1.55;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+}
+
+.confirm-go.go {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .24), 0 1px 2px rgba(8, 12, 24, .3);
+}
+.confirm-go.go:hover:not(:disabled) { color: #fff; background: var(--accent); filter: brightness(1.07); border-color: transparent; }
+
+/* The second tile control. Two 26px buttons still leave most of a 184px tile
+   showing the picture. */
+.shot-edit {
+  position: absolute;
+  right: 39px;
+  bottom: 40px;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  padding: 0;
+  opacity: 0;
+  color: #fff;
+  background: rgba(12, 16, 26, .82);
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 9px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: opacity .14s var(--swift), background .14s var(--swift), transform .14s var(--ease);
+}
+.shot:hover .shot-edit,
+.shot:focus-within .shot-edit { opacity: 1; }
+.shot-edit:hover { background: var(--accent); border-color: transparent; transform: scale(1.06); }
+.shot-edit svg { width: 13px; height: 13px; }

@@ -395,12 +395,13 @@ function createCountWindow() {
  * a crisp overlay on.
  */
 function createRegion(display) {
-  const bounds = display.bounds
   const overlay = new BrowserWindow({
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
+    // Sized after construction, not in it. Electron clamps a new window to what
+    // it thinks the screen can hold, so an overlay for a 1920x1080 monitor came
+    // back 1280x672 — two thirds of the display, with the rest of it simply not
+    // selectable.
+    width: 800,
+    height: 600,
     frame: false,
     transparent: true,
     resizable: false,
@@ -430,6 +431,7 @@ function createRegion(display) {
       backgroundThrottling: false
     }
   })
+  coverDisplay(overlay, display)
   overlay.setAlwaysOnTop(true, 'screen-saver')
   overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlay.loadURL(`capture://app/windows/region.html?display=${display.id}`)
@@ -456,6 +458,14 @@ function createRegion(display) {
 let hook = null
 let hookRunning = false
 let hookError = null
+
+/**
+ * Whether a take is in progress.
+ *
+ * The default is to watch the keyboard only while recording, so this is half of
+ * the answer to "should the hook be running" — the setting is the other half.
+ */
+let recordingLive = false
 
 /**
  * The strip as the overlay last drew it.
@@ -584,8 +594,19 @@ function createKeysWindow() {
  * keylogger, and a window with no hook is an empty rectangle on top of
  * everything.
  */
+/**
+ * Should the keyboard be watched right now?
+ *
+ * Two conditions, not one. The feature being switched on is permission to watch
+ * during a take; it is not permission to watch for the whole time the app is
+ * open. Anyone who does want that has to say so, which is what `keypressWhen`
+ * is for.
+ */
+const wantKeys = () =>
+  Boolean(current.keypress) && (current.keypressWhen === 'always' || recordingLive)
+
 async function syncKeypress() {
-  if (current.keypress) {
+  if (wantKeys()) {
     const ok = await startHook()
     if (!ok) {
       // The setting cannot stay on if the thing it needs did not load, or the
@@ -895,8 +916,25 @@ function beginRegion() {
   const promise = new Promise((resolve) => { settle = resolve })
   regionPending = { promise, resolve: settle }
 
-  for (const overlay of overlays) {
-    overlay.once('ready-to-show', () => overlay.show())
+  /**
+   * Escape, from wherever the user is.
+   *
+   * Only one of the overlays can hold keyboard focus, and it will not reliably
+   * be the one on the screen being looked at — so the key that abandons a
+   * full-screen overlay covering every display cannot depend on which window
+   * happens to have focus.
+   */
+  try {
+    globalShortcut.register('Escape', () => finishRegion(null))
+  } catch { /* another app owns it; Escape inside the focused overlay still works */ }
+
+  const under = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  for (const [i, overlay] of overlays.entries()) {
+    overlay.once('ready-to-show', () => {
+      overlay.show()
+      // Exactly one of them takes focus, and it is the one the pointer is on.
+      if (screen.getAllDisplays()[i]?.id === under.id) overlay.focus()
+    })
     overlay.on('closed', () => {
       // Every overlay gone with no answer is a cancel, however it happened.
       if (regionPending && overlays.every((o) => o.isDestroyed())) finishRegion(null)
@@ -915,6 +953,7 @@ function closeOverlays() {
 async function finishRegion(result) {
   const pending = regionPending
   regionPending = null
+  try { globalShortcut.unregister('Escape') } catch { /* never registered */ }
   closeOverlays()
   if (!pending) return
   if (!result) { pending.resolve(null); return }
@@ -967,13 +1006,13 @@ function handlers() {
 
   ipcMain.handle('settings:read', async () => current)
   ipcMain.handle('settings:write', async (_e, patch) => {
-    const was = current.keypress
+    const was = { keypress: current.keypress, keypressWhen: current.keypressWhen }
     const next = await saveSettings({ ...current, ...patch, hotkeys: { ...current.hotkeys, ...(patch?.hotkeys || {}) } })
     bindHotkeys()
     if (bar && !bar.isDestroyed()) bar.setContentProtection(next.protectBar !== false)
-    // Turning it on or off starts and stops the hook; anything else just
-    // restyles a HUD that is already up.
-    if (next.keypress !== was) await syncKeypress()
+    // Turning it on or off — or changing when it watches — starts and stops the
+    // hook; anything else just restyles a HUD that is already up.
+    if (next.keypress !== was.keypress || next.keypressWhen !== was.keypressWhen) await syncKeypress()
     else send(keysWin, 'keys:config', next)
     send(win, 'settings:changed', next)
     return next
@@ -1002,9 +1041,47 @@ function handlers() {
       thumbnailSize: { width: 360, height: 240 },
       fetchWindowIcons: true
     })
+    /**
+     * Our own windows, by the id `desktopCapturer` would give them.
+     *
+     * This used to match on the window title — `/^Rebind Capture$/` — which
+     * caught the app window and nothing else. The overlays are titled "Keys",
+     * "Starting" and "Recording", so every one of them was offered as something
+     * to capture, and the keypress overlay is a full-screen transparent window
+     * that sorts first: the default choice in the window picker was an
+     * invisible sheet of glass belonging to the app doing the asking.
+     *
+     * `getMediaSourceId()` is the same identifier the enumeration returns, so
+     * this matches on identity rather than on a string anyone could change.
+     */
+    const own = new Set(
+      BrowserWindow.getAllWindows()
+        .map((w) => {
+          try { return w.getMediaSourceId() } catch { return null }
+        })
+        .filter(Boolean)
+    )
+
     return sources
-      // Our own overlays and the transport are not things anyone means to record.
-      .filter((s) => !/^Rebind Capture$/.test(s.name) || s.id.startsWith('screen'))
+      // Our own overlays and the transport are not things anyone means to
+      // record, and a display is never one of ours.
+      .filter((s) => s.id.startsWith('screen') || !own.has(s.id))
+      /**
+       * Drop anything Windows Graphics Capture will not photograph.
+       *
+       * An empty thumbnail here means WGC refused this source — it logs
+       * `Failed to start capture: -2147024809` (E_INVALIDARG) and carries on,
+       * so the source still comes back, just with no picture. Some windows
+       * simply cannot be captured: service managers and other windows with no
+       * composited surface, and anything minimised.
+       *
+       * Offering one is offering a tile that can only fail, and the failure
+       * arrives later with a message about the window being gone. A source with
+       * no preview is a source we cannot capture, so it does not go in the list
+       * — a display is exempt, because a screen with a momentarily empty
+       * thumbnail is still a screen and dropping it would empty the picker.
+       */
+      .filter((s) => s.id.startsWith('screen') || !s.thumbnail.isEmpty())
       .map((s) => ({
         id: s.id,
         name: s.name,
@@ -1030,6 +1107,18 @@ function handlers() {
 
   /** What is on the strip right now, for burning into a capture. */
   ipcMain.handle('keys:snapshot', async () => keysSnapshot)
+
+  /**
+   * A take started or ended.
+   *
+   * The renderer owns the recorder, so it is the only thing that knows. Main
+   * owns the hook, so it is the only thing that can act on it.
+   */
+  ipcMain.handle('keys:recording', async (_e, live) => {
+    recordingLive = Boolean(live)
+    await syncKeypress()
+    return wantKeys()
+  })
   ipcMain.on('keys:report', (_e, caps) => { keysSnapshot = caps })
 
   ipcMain.handle('region:done', (_e, result) => finishRegion(result))
@@ -1249,8 +1338,9 @@ else {
     handlers()
     createWindow()
     bindHotkeys()
-    // Restore it if it was left on, so the setting survives a restart.
-    if (current.keypress) syncKeypress()
+    // Restore it if it was left on — which for the default 'recording' mode
+    // means nothing starts until a take does.
+    if (wantKeys()) syncKeypress()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

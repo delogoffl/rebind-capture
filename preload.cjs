@@ -100,6 +100,8 @@ contextBridge.exposeInMainWorld('capture', {
     available: () => ipcRenderer.invoke('keys:available'),
     snapshot: () => ipcRenderer.invoke('keys:snapshot'),
     report: (caps) => ipcRenderer.send('keys:report', caps),
+    /** A take started or ended — the hook follows it, by default. */
+    recording: (live) => ipcRenderer.invoke('keys:recording', live),
     onDown: on('keys:down'),
     onConfig: on('keys:config'),
     onUnavailable: on('keys:unavailable')

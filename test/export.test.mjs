@@ -222,3 +222,58 @@ describe('the markdown report', () => {
     assert.ok(text.includes('\\"run it\\"'), text)
   })
 })
+
+/**
+ * The three fields the exports print.
+ *
+ * `label`, `notes` and `step.title` were all in the model and all read by the
+ * exporters, and until the library grew editors for them none of the three
+ * could be set by anything: `ensureSession` passed an empty label, no screen
+ * ever wrote `notes`, and a step's title was whatever window class the capture
+ * came from. These assert the consuming end — that a value written by the
+ * library is a value that comes out the other side — so that removing the
+ * editors, or renaming a field under them, fails here.
+ */
+describe('what the editable fields do to an export', () => {
+  test('notes are printed under the heading', () => {
+    const { session } = fixture({ steps: 1 })
+    session.notes = 'Reproducing the double charge at checkout.'
+    const text = markdown(session, session.steps, { includeMeta: false })
+
+    assert.match(text, /Reproducing the double charge at checkout\./)
+    // Above the first step, or it is a footnote rather than context.
+    assert.ok(text.indexOf('Reproducing') < text.indexOf('### 1.'), text)
+  })
+
+  test('empty notes add nothing rather than a blank line', () => {
+    const { session } = fixture({ steps: 1 })
+    const without = markdown(session, session.steps, { includeMeta: false })
+    session.notes = ''
+    assert.equal(markdown(session, session.steps, { includeMeta: false }), without)
+  })
+
+  test('a step title is the heading on its page', () => {
+    const { session } = fixture({ steps: 2 })
+    session.steps[0].title = 'Pressed Pay now'
+    const text = markdown(session, session.steps, { includeMeta: false })
+    assert.match(text, /### 1\. Pressed Pay now/)
+    // Numbering is the app's, not the author's — a retitled step keeps its place.
+    assert.match(text, /### 2\. Step about 2/)
+  })
+
+  test('a label renames the files the export writes', () => {
+    // How every real session starts: `ensureSession` passes no label, so the
+    // folder name is a bare timestamp and the label is what renaming sets.
+    const session = newSession()
+    assert.match(outputName('pdf', session), /^20\d{6}-\d{6}\.pdf$/)
+
+    session.label = 'Checkout double-charge'
+    assert.equal(outputName('pdf', session), 'checkout-double-charge.pdf')
+
+    // Clearing it is a real answer, and the timestamp comes back — which is
+    // what the dialog promises. `name` is the folder on disk and never moves.
+    session.label = ''
+    assert.equal(outputName('pdf', session), `${session.name}.pdf`)
+    assert.match(outputName('pdf', session), /^20\d{6}-\d{6}\.pdf$/)
+  })
+})

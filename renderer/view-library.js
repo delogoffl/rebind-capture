@@ -10,7 +10,7 @@
  * with its own one-click download.
  */
 
-import { el, icon, toast, mmss, humanBytes, when, bytesToUrl, toJpeg } from './ui.js'
+import { el, icon, toast, confirm, promptFor, mmss, humanBytes, when, bytesToUrl, toJpeg } from './ui.js'
 import { state, refreshSessions, forgetSession, go } from './app.js'
 import { buildExport, estimate, outputName } from '../lib/export.js'
 import { renumber, summarise } from '../lib/session.js'
@@ -193,6 +193,8 @@ export function mountLibrary({ root, api }) {
       `${humanBytes(sum.bytes)} · started ${new Date(session.startedAt).toLocaleString()}`
 
     headActions.replaceChildren(
+      el('button.btn', { type: 'button', onClick: renameSession, title: 'Rename this session' }, [icon('pen'), 'Rename']),
+      el('button.btn', { type: 'button', onClick: editNotes, title: 'Notes, printed at the top of the export' }, [icon('file'), 'Notes']),
       el('button.btn', { type: 'button', onClick: () => api.library.reveal(session.id) }, [icon('folder'), 'Show files']),
       el('button.btn', { type: 'button', onClick: doRenumber, title: 'Close gaps left by deleted steps' }, [icon('refresh'), 'Renumber']),
       el('button.btn.danger', { type: 'button', onClick: doDeleteSession }, [icon('trash'), 'Delete session'])
@@ -220,21 +222,64 @@ export function mountLibrary({ root, api }) {
         src = null
       }
 
-      const tile = el('button.shot', {
+      const toggle = () => {
+        if (pickedSteps.has(step.id)) pickedSteps.delete(step.id)
+        else pickedSteps.add(step.id)
+        tile.setAttribute('aria-pressed', String(pickedSteps.has(step.id)))
+        paintDock()
+      }
+
+      /**
+       * A real delete, on the tile.
+       *
+       * Deleting a step used to be alt-click on the tile — a gesture with
+       * nothing on screen to suggest it exists, so in practice there was no way
+       * to delete a capture at all. It appears on hover and on keyboard focus,
+       * so it is discoverable without being permanent clutter over the picture.
+       */
+      const rename = el('button.shot-edit', {
         type: 'button',
+        title: `Rename step ${step.index}`,
+        'aria-label': `Rename step ${step.index}`,
+        onClick: (event) => { event.stopPropagation(); renameStep(step) }
+      }, [icon('pen')])
+
+      const drop = el('button.shot-del', {
+        type: 'button',
+        title: `Delete step ${step.index}`,
+        'aria-label': `Delete step ${step.index}`,
+        onClick: (event) => {
+          // Without this the click also lands on the tile behind it and toggles
+          // the selection on the way to opening the dialog.
+          event.stopPropagation()
+          removeStep(step)
+        }
+      }, [icon('trash')])
+
+      /**
+       * A div, not a button.
+       *
+       * The delete control has to live inside the tile, and a button nested in
+       * a button is invalid HTML — browsers drop it out of the parent, and the
+       * click stops being reliable.
+       */
+      const tile = el('div.shot', {
+        role: 'button',
+        tabindex: '0',
         'aria-pressed': String(pickedSteps.has(step.id)),
         title: step.title,
-        onClick: (event) => {
-          if (event.altKey) { removeStep(step); return }
-          if (pickedSteps.has(step.id)) pickedSteps.delete(step.id)
-          else pickedSteps.add(step.id)
-          tile.setAttribute('aria-pressed', String(pickedSteps.has(step.id)))
-          paintDock()
+        onClick: toggle,
+        onKeydown: (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          toggle()
         }
       }, [
         src ? el('img', { src, alt: step.title, loading: 'lazy' }) : el('div', { style: { aspectRatio: '16/10' } }),
         el('span.n', { text: String(step.index) }),
         el('span.tick', {}, [icon('check')]),
+        rename,
+        drop,
         el('span.cap', { text: step.title })
       ])
       return tile
@@ -361,6 +406,13 @@ export function mountLibrary({ root, api }) {
   }
 
   async function removeStep(step) {
+    const ok = await confirm({
+      title: `Delete step ${step.index}?`,
+      body: `“${step.title}” will be removed from this session and deleted from disk. This cannot be undone.`,
+      action: 'Delete step'
+    })
+    if (!ok) return
+
     session.steps = session.steps.filter((s) => s.id !== step.id)
     pickedSteps.delete(step.id)
     await api.library.removeAsset({ sessionId: session.id, name: step.file })
@@ -380,6 +432,13 @@ export function mountLibrary({ root, api }) {
   }
 
   async function removeTape(item) {
+    const ok = await confirm({
+      title: 'Delete this recording?',
+      body: `${mmss(item.durationMs)} of video, ${humanBytes(item.bytes)}. It will be deleted from disk and cannot be recovered.`,
+      action: 'Delete recording'
+    })
+    if (!ok) return
+
     session.media = session.media.filter((m) => m.id !== item.id)
     pickedTapes.delete(item.id)
     await api.library.removeAsset({ sessionId: session.id, name: item.file })
@@ -402,20 +461,109 @@ export function mountLibrary({ root, api }) {
     toast(`Renumbered ${session.steps.length} steps`)
   }
 
-  let armed = null
+  /**
+   * The name on the exports.
+   *
+   * A session is named after the moment it started — `20260903-142206` — which
+   * sorts well and means nothing. The label is what the library lists, what the
+   * title bar shows and what the exported files are called, and until now it
+   * could only ever be empty: `ensureSession` passed `''` and nothing else ever
+   * set it.
+   *
+   * Clearing it is a real answer, and puts the timestamp back.
+   */
+  async function renameSession() {
+    const answer = await promptFor({
+      title: 'Rename session',
+      body: 'This is what the library lists and what exported files are named. Leave it empty to go back to the timestamp.',
+      label: 'Name',
+      value: session.label,
+      placeholder: session.name,
+      action: 'Rename'
+    })
+    if (answer === null) return
+
+    session.label = answer
+    await api.library.save(session)
+    // The rail's card and the title bar both read the label, and this may be
+    // the session they are showing.
+    if (state.session?.id === session.id) state.session.label = answer
+    await loadSessions()
+    toast(answer ? `Renamed to “${answer}”` : 'Name cleared')
+  }
+
+  /**
+   * Notes, which the export prints and nothing could write.
+   *
+   * `session.notes` has been in the model and in the Markdown report since the
+   * first build — the report drops it in under the heading — but no screen ever
+   * set it. A field the exporter prints and the app cannot fill is a promise
+   * the product does not keep.
+   */
+  async function editNotes() {
+    const answer = await promptFor({
+      title: 'Session notes',
+      body: 'Printed at the top of a Markdown export, under the heading. What the run was for, what was being reproduced, what to look at.',
+      label: 'Notes',
+      value: session.notes || '',
+      placeholder: 'Reproducing the double-charge on checkout…',
+      action: 'Save notes',
+      multiline: true,
+      maxLength: 2000
+    })
+    if (answer === null) return
+
+    session.notes = answer
+    await api.library.save(session)
+    toast(answer ? 'Notes saved' : 'Notes cleared')
+  }
+
+  /**
+   * A step's title is the heading on its PDF page.
+   *
+   * It is generated from the window the capture came from, which is a
+   * reasonable guess and not a caption anybody chose — and it is what a
+   * colleague reads at the top of the page.
+   */
+  async function renameStep(step) {
+    const answer = await promptFor({
+      title: `Rename step ${step.index}`,
+      body: 'This is the heading on the step’s page in a PDF or Markdown export.',
+      label: 'Title',
+      value: step.title,
+      placeholder: `Step ${step.index}`,
+      action: 'Rename'
+    })
+    if (answer === null) return
+
+    step.title = answer || `Step ${step.index}`
+    await api.library.save(session)
+    await openSession(session.id)
+    toast('Step renamed')
+  }
+
+  /**
+   * Deleting a whole session asks in a dialog.
+   *
+   * It used to arm the button in place — one click turned it into
+   * "Delete — sure?" and the next did it. The second click lands on the same
+   * pixels as the first, so a double-click deleted a session without ever
+   * showing the question.
+   */
   async function doDeleteSession() {
-    const button = headActions.lastElementChild
-    if (armed !== session.id) {
-      armed = session.id
-      button.lastChild.textContent = 'Delete — sure?'
-      setTimeout(() => {
-        if (armed !== session.id) return
-        armed = null
-        button.lastChild.textContent = 'Delete session'
-      }, 3200)
-      return
-    }
-    armed = null
+    const sum = summarise(session)
+    const holds = [
+      sum.steps ? `${sum.steps} step${sum.steps === 1 ? '' : 's'}` : null,
+      sum.media ? `${sum.media} recording${sum.media === 1 ? '' : 's'}` : null
+    ].filter(Boolean).join(' and ') || 'nothing'
+
+    const ok = await confirm({
+      title: `Delete “${session.label || session.name}”?`,
+      body: `This session holds ${holds}, ${humanBytes(sum.bytes)} in total. The whole folder is deleted from disk and cannot be recovered.`,
+      action: 'Delete session'
+    })
+    if (!ok) return
+
     const gone = session.id
     await api.library.remove(gone)
     // Clearing the pointer is not enough on its own — the rail's card is

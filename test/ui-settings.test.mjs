@@ -29,6 +29,19 @@ const ROOT = join(HERE, '..')
 
 const source = (file) => readFileSync(join(ROOT, file), 'utf8')
 
+/**
+ * The source with its comments removed.
+ *
+ * Assertions about what the code does *not* do keep matching the comment that
+ * explains why it does not do it — the note above a fix names the thing it
+ * replaced, which is exactly the string the test is looking for. Stripping
+ * comments first means "this file does not call `window.focus()`" asks about
+ * the code and not about the prose.
+ */
+const code = (file) => source(file)
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1')
+
 /** Every `key: 'name'` inside the SECTIONS block of the settings view. */
 function specKeys() {
   const text = source('renderer/view-settings.js')
@@ -396,5 +409,299 @@ describe('the overlay windows keep painting', () => {
     const unthrottled = (main.match(/backgroundThrottling: false/g) || []).length
     assert.equal(unthrottled, windows,
       `${windows} windows but only ${unthrottled} keep running while hidden`)
+  })
+})
+
+describe('windows that cannot be captured', () => {
+  /**
+   * Some windows Windows Graphics Capture simply refuses — service managers and
+   * others with no composited surface, and anything minimised. It logs
+   * `Failed to start capture: -2147024809` (E_INVALIDARG) and carries on, so
+   * the source still comes back from `getSources`, just with no picture.
+   *
+   * Offering one in the picker is offering a tile that can only fail, and the
+   * failure arrives much later as a message about the window being gone.
+   */
+  test('a source with no preview is not offered', () => {
+    const main = readFileSync(join(ROOT, 'main.cjs'), 'utf8')
+    const handler = main.slice(
+      main.indexOf("ipcMain.handle('capture:sources'"),
+      main.indexOf("ipcMain.handle('region:done'")
+    )
+    assert.match(handler, /\.filter\(\(s\) => s\.id\.startsWith\('screen'\) \|\| !s\.thumbnail\.isEmpty\(\)\)/,
+      'windows with an empty thumbnail must be filtered out of the picker')
+  })
+
+  test('displays are exempt from that filter', () => {
+    // A screen with a momentarily empty thumbnail is still a screen, and
+    // dropping it would leave the picker with nothing in it at all.
+    const main = readFileSync(join(ROOT, 'main.cjs'), 'utf8')
+    assert.match(main, /s\.id\.startsWith\('screen'\) \|\| !s\.thumbnail\.isEmpty\(\)/)
+  })
+})
+
+describe('the app does not offer itself as a capture target', () => {
+  /**
+   * The filter matched on the window title — `/^Rebind Capture$/` — which
+   * caught the app window and nothing else. The overlays are titled "Keys",
+   * "Starting" and "Recording", so all three were offered as things to record;
+   * and the keypress overlay is a full-screen transparent window that sorts
+   * first, so the default selection in the window picker was an invisible sheet
+   * of glass belonging to the app doing the asking.
+   */
+  const main = () => readFileSync(join(ROOT, 'main.cjs'), 'utf8')
+
+  test('own windows are excluded by identity, not by title', () => {
+    const text = main()
+    assert.match(text, /getMediaSourceId\(\)/,
+      'the source id is the only reliable way to recognise our own windows')
+    assert.ok(!/\/\^Rebind Capture\$\/\.test/.test(text),
+      'matching on the title missed every window that is not the main one')
+  })
+
+  test('the exclusion covers every window the app opens', () => {
+    // Built from `getAllWindows()` rather than a hand-kept list, so a window
+    // added later cannot be forgotten.
+    assert.match(main(), /BrowserWindow\.getAllWindows\(\)[\s\S]{0,160}getMediaSourceId/)
+  })
+
+  test('displays are never excluded by it', () => {
+    assert.match(main(), /s\.id\.startsWith\('screen'\) \|\| !own\.has\(s\.id\)/)
+  })
+})
+
+describe('the keyboard is watched only while it is being recorded', () => {
+  /**
+   * The hook ran for the whole time the app was open, which is not what
+   * "show my keypresses in the recording" asks for and is not something anyone
+   * should have to take on trust. It now follows the take by default.
+   */
+  test('the setting alone is not enough to start the hook', () => {
+    const main = readFileSync(join(ROOT, 'main.cjs'), 'utf8')
+    assert.match(main, /const wantKeys = \(\) =>\s*\n\s*Boolean\(current\.keypress\) && \(current\.keypressWhen === 'always' \|\| recordingLive\)/,
+      'watching has to depend on a take being live, not only on the switch')
+  })
+
+  test('the recorder arms it and disarms it', () => {
+    const record = readFileSync(join(ROOT, 'renderer/view-record.js'), 'utf8')
+    assert.match(record, /api\.keys\.recording\(true\)/, 'a take arms the hook')
+    // Both the normal finish and the failed-start path have to disarm, or the
+    // hook outlives a recording that never happened.
+    assert.equal((record.match(/api\.keys\.recording\(false\)/g) || []).length, 2)
+  })
+
+  test('always-on is available but has to be asked for', () => {
+    assert.equal(DEFAULTS.keypressWhen, 'recording', 'the safer mode is the default')
+    const view = readFileSync(join(ROOT, 'renderer/view-settings.js'), 'utf8')
+    assert.match(view, /key: 'keypressWhen'/, 'and the choice is on the settings page')
+  })
+})
+
+describe('the picker keeps up with what is open', () => {
+  test('both pickers watch, and stop watching with the view', () => {
+    for (const file of ['renderer/view-capture.js', 'renderer/view-record.js']) {
+      const text = readFileSync(join(ROOT, file), 'utf8')
+      assert.match(text, /watchSources\(\{/, `${file} should watch its sources`)
+      assert.match(text, /watcher\.start\(\)/, `${file} should start the watcher`)
+      assert.match(text, /watcher\.prime\(found\)/,
+        `${file} should seed the baseline so the first poll is not a false change`)
+    }
+  })
+
+  test('the recorder does not enumerate mid-take', () => {
+    const record = readFileSync(join(ROOT, 'renderer/view-record.js'), 'utf8')
+    const watcher = record.slice(record.indexOf('const watcher = watchSources'))
+    assert.match(watcher, /if \(state\.phase !== 'ready'\) return/,
+      'enumerating during a recording is work taken from the recorder')
+  })
+})
+
+describe('region capture across displays', () => {
+  /**
+   * There is one overlay per display and only one window can hold focus, so
+   * every overlay calling `window.focus()` on load meant the last to load stole
+   * focus from the rest — and a `blur` handler that cancelled on losing focus
+   * then tore the whole flow down. On a single screen it worked by accident;
+   * with a second monitor attached, region capture cancelled itself the instant
+   * it opened and no overlay was ever visible.
+   */
+  const region = () => code('windows/region.js')
+  const main = () => readFileSync(join(ROOT, 'main.cjs'), 'utf8')
+
+  test('an overlay does not cancel the flow by losing focus', () => {
+    const text = region()
+    assert.ok(!/addEventListener\('blur'/.test(text),
+      'only one of N overlays can hold focus, so blur cannot mean "abandoned"')
+    assert.ok(!/window\.focus\(\)/.test(text),
+      'every overlay grabbing focus is a fight the last one to load wins')
+  })
+
+  test('Escape works whichever overlay has focus', () => {
+    // The key that abandons an overlay covering every display cannot depend on
+    // which window happens to hold focus.
+    assert.match(main(), /globalShortcut\.register\('Escape'/)
+    assert.match(main(), /globalShortcut\.unregister\('Escape'\)/)
+  })
+
+  test('overlays are sized to their display after construction', () => {
+    // Electron clamps a new window to what it thinks the screen can hold, so
+    // constructor bounds gave a 1920x1080 monitor a 1280x672 overlay — two
+    // thirds of the display, with the rest not selectable.
+    const text = main()
+    const fn = text.slice(text.indexOf('function createRegion'), text.indexOf('function createRegion') + 1400)
+    assert.match(fn, /coverDisplay\(overlay, display\)/)
+    const bare = code('main.cjs')
+    const fnCode = bare.slice(bare.indexOf('function createRegion'), bare.indexOf('function createRegion') + 900)
+    assert.ok(!/x: bounds\.x/.test(fnCode), 'constructor bounds are the clamped path')
+  })
+})
+
+describe('the primary action', () => {
+  test('one lit surface, not a two-hue gradient in coloured fog', () => {
+    const css = readFileSync(join(ROOT, 'renderer/styles.css'), 'utf8')
+    const cta = css.slice(css.indexOf('.cta {'), css.indexOf('.cta:hover'))
+    assert.ok(!/linear-gradient\(180deg, var\(--accent-2\), var\(--accent\)\)/.test(cta),
+      'a button that changes hue down its height is pretending to be a light source')
+    assert.match(cta, /inset 0 1px 0 rgba\(255, 255, 255, \.28\)/,
+      'the top-edge highlight is what makes it read as a physical key')
+    assert.ok(!/var\(--accent-glow\)/.test(cta),
+      'a coloured halo is what made it read as a web hero button')
+  })
+})
+
+describe('deleting a capture', () => {
+  const library = () => code('renderer/view-library.js')
+
+  test('a step has a visible delete, not a hidden gesture', () => {
+    const text = library()
+    assert.match(text, /el\('button\.shot-del'/,
+      'alt-click had nothing on screen to suggest it existed')
+    assert.ok(!/event\.altKey/.test(text), 'the gesture is replaced, not merely supplemented')
+  })
+
+  test('the tile is not a button, so the delete inside it can be one', () => {
+    // A button nested in a button is invalid; browsers hoist it out of the
+    // parent and the click stops being reliable.
+    const text = library()
+    assert.match(text, /el\('div\.shot', \{\s*role: 'button'/)
+    assert.match(text, /tabindex: '0'/, 'and it still has to be reachable by keyboard')
+  })
+
+  test('the delete does not also toggle the selection behind it', () => {
+    assert.match(library(), /event\.stopPropagation\(\)[\s\S]{0,60}removeStep\(step\)/)
+  })
+})
+
+describe('confirming an irreversible delete', () => {
+  /**
+   * The session delete used to arm the button in place: one click turned it
+   * into "Delete — sure?" and the next did it. The second click lands on the
+   * same pixels as the first, so a double-click deleted a session without ever
+   * showing the question.
+   */
+  const library = () => code('renderer/view-library.js')
+
+  test('the arm-in-place button is gone', () => {
+    const text = library()
+    assert.ok(!/Delete — sure\?/.test(text))
+    assert.ok(!/armed/.test(text), 'the armed-state bookkeeping goes with it')
+  })
+
+  test('all three deletes ask in a dialog', () => {
+    const text = library()
+    assert.equal((text.match(/await confirm\(\{/g) || []).length, 3,
+      'a step, a recording and a session are each irreversible')
+    // And each one has to be able to answer "no".
+    assert.equal((text.match(/if \(!ok\) return/g) || []).length, 3)
+  })
+
+  test('the dialog says what will actually be lost', () => {
+    const text = library()
+    assert.match(text, /holds \$\{holds\}, \$\{humanBytes\(sum\.bytes\)\}/,
+      'a session delete should name how much is in it')
+    assert.match(text, /mmss\(item\.durationMs\)\}\ of video/,
+      'a recording delete should name its length')
+  })
+
+  test('the safe answer is the one focus starts on', () => {
+    // A stray Return on a destructive question must not confirm it.
+    const ui = code('renderer/ui.js')
+    const fn = ui.slice(ui.indexOf('export function confirm'))
+    assert.match(fn, /cancel\.focus\(\)/)
+    assert.match(fn, /event\.key === 'Escape'/, 'Escape has to be an answer')
+  })
+})
+
+/**
+ * Naming things.
+ *
+ * `session.label`, `session.notes` and `step.title` were each defined in the
+ * model, written to disk on every save, and read by the exporters — and none of
+ * them could be set. `label` was always the empty string `ensureSession` passed
+ * it; `notes` was as dead as `countIn` had been; a step's title was the window
+ * class the capture came from, printed as the heading of its page.
+ *
+ * The same drift the settings spec above guards against, in the library. These
+ * assert the writing end — that the editors exist and write the field the
+ * export reads — and `export.test.mjs` asserts the reading end.
+ */
+describe('editing the names an export prints', () => {
+  const library = () => code('renderer/view-library.js')
+
+  test('each editor writes the field the exporters actually read', () => {
+    const text = library()
+    assert.match(text, /session\.label = answer/, 'the library list and the output filename')
+    assert.match(text, /session\.notes = answer/, 'printed under the heading of a Markdown report')
+    assert.match(text, /step\.title = answer \|\| `Step \$\{step\.index\}`/,
+      'the heading on a step’s page, and never blank')
+  })
+
+  test('all three persist, because the exporters read disk and not the screen', () => {
+    const fn = (name) => {
+      const text = library()
+      const start = text.indexOf(`async function ${name}(`)
+      assert.ok(start > 0, `${name} is gone`)
+      return text.slice(start, text.indexOf('\n  }', start))
+    }
+    for (const name of ['renameSession', 'editNotes', 'renameStep']) {
+      assert.match(fn(name), /await api\.library\.save\(session\)/, `${name} must save`)
+    }
+  })
+
+  test('cancelling changes nothing', () => {
+    // The dialog resolves null for cancel and '' for a field cleared on
+    // purpose, so the guard has to be `=== null` — `if (!answer)` would make
+    // "clear this" indistinguishable from "never mind".
+    const text = library()
+    assert.equal((text.match(/if \(answer === null\) return/g) || []).length, 3)
+  })
+
+  test('renaming a session also updates the session the app is using', () => {
+    // The rail card and the record view read `state.session.label`; leaving
+    // that stale renames the library entry and nothing else on screen.
+    assert.match(library(), /state\.session\?\.id === session\.id[\s\S]{0,80}state\.session\.label = answer/)
+  })
+
+  test('the rename on a tile does not toggle the selection behind it', () => {
+    const text = library()
+    assert.match(text, /el\('button\.shot-edit'/, 'a step needs a visible way to be retitled')
+    assert.match(text, /event\.stopPropagation\(\)[\s\S]{0,60}renameStep\(step\)/)
+  })
+
+  test('the prompt opens with the field focused and the old value selected', () => {
+    // A rename box that needs a click before typing, or a select-all before
+    // replacing, is a rename box nobody uses twice.
+    const ui = code('renderer/ui.js')
+    const fn = ui.slice(ui.indexOf('export function promptFor'))
+    assert.match(fn, /field\.focus\(\)/)
+    assert.match(fn, /if \(!multiline\) field\.select\(\)/)
+  })
+
+  test('Escape cancels, and Return only saves where it is not a newline', () => {
+    const ui = code('renderer/ui.js')
+    const fn = ui.slice(ui.indexOf('export function promptFor'))
+    assert.match(fn, /event\.key === 'Escape'[\s\S]{0,60}finish\(null\)/)
+    assert.match(fn, /event\.key === 'Enter' && !multiline/,
+      'Return in a textarea has to insert a line, not submit the notes')
   })
 })

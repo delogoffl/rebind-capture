@@ -89,11 +89,17 @@ addEventListener('contextmenu', (event) => {
   api.region.cancel()
 })
 
-// The overlay steals the pointer from every other window; if it somehow loses
-// focus without a selection, it has no reason to still be there.
-addEventListener('blur', () => { if (!from && !done) api.region.cancel() })
-
-// Focus the document so the keydown listener actually receives Escape — a
-// transparent frameless window does not always get keyboard focus on show.
-addEventListener('DOMContentLoaded', () => window.focus())
-window.focus()
+/**
+ * No blur handler, and no fight for focus.
+ *
+ * There is one overlay per display, and only one window can hold focus — so
+ * every overlay calling `window.focus()` on load meant the last one to load
+ * stole focus from the rest, and a `blur` handler that cancelled on losing
+ * focus then tore the whole flow down. On a single screen it worked by
+ * accident; plug in a second monitor and region capture cancelled itself the
+ * instant it opened.
+ *
+ * Escape is handled by a global shortcut in main for the same reason: only one
+ * of these windows can receive a keypress, and it will not reliably be the one
+ * the user is looking at.
+ */
