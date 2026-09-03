@@ -1,0 +1,1148 @@
+/**
+ * Rebind Capture — the visual system.
+ *
+ * Written out by hand, like the PDF and ZIP writers, for the same reason: this
+ * app has two devDependencies and no runtime ones, and a 1400px desktop window
+ * does not need a framework to lay out four views.
+ *
+ * Four rules the rest of the file follows.
+ *
+ *   One spacing scale. Everything is a multiple of 4, and the chrome inset is a
+ *   single token. The rail used to be 12px on the left, 13 on the right and 14
+ *   at the bottom — invisible in isolation, and read as sloppiness the moment
+ *   two of those edges were on screen together.
+ *
+ *   Borders are translucent white, not a fixed grey. A hairline over the canvas
+ *   and the same hairline over a raised card are two different greys if you
+ *   name the grey; they are one border if you name the alpha. That is what
+ *   stops nested surfaces developing seams.
+ *
+ *   Depth comes from a light source, not a drop shadow. Every raised surface
+ *   carries a 1px inset highlight along its top edge, which is what makes a
+ *   card read as a physical thing under a light rather than a rectangle with a
+ *   border. Shadow is spent only on what genuinely floats.
+ *
+ *   Colour carries meaning. The accent is the product and its actions, cyan is
+ *   a capture, rose is recording, amber is a caveat, emerald is a success. The
+ *   accent is a variable so the user can move it without any of that collapsing
+ *   into decoration.
+ */
+
+:root {
+  /* Surfaces. Near-black and neutral, so the accent is the only real colour. */
+  --canvas: #08090E;
+  --chrome: #0B0C12;
+  --surface: #101219;
+  --raised: #161923;
+  --overlay: #1E212D;
+
+  /* Alpha, not grey — see the note above. */
+  --hairline: rgba(255, 255, 255, .065);
+  --edge: rgba(255, 255, 255, .11);
+  --edge-strong: rgba(255, 255, 255, .2);
+  --sheen: rgba(255, 255, 255, .045);
+
+  --text: #F3F5FA;
+  --dim: #98A0B2;
+  --faint: #6B7385;
+  --ghost: #4B5263;
+
+  --accent: #6366F1;
+  --accent-2: #8B5CF6;
+  --accent-text: #ABB2FF;
+  --accent-soft: rgba(99, 102, 241, .15);
+  --accent-line: rgba(99, 102, 241, .42);
+  --accent-glow: rgba(99, 102, 241, .45);
+
+  --shot: #06B6D4;
+  --shot-text: #67E8F9;
+  --shot-soft: rgba(6, 182, 212, .14);
+  --shot-line: rgba(6, 182, 212, .36);
+
+  --rec: #F43F5E;
+  --rec-text: #FDA4AF;
+  --rec-soft: rgba(244, 63, 94, .14);
+  --rec-line: rgba(244, 63, 94, .40);
+
+  --warn: #F59E0B;
+  --warn-text: #FCD34D;
+  --warn-soft: rgba(245, 158, 11, .13);
+  --warn-line: rgba(245, 158, 11, .36);
+
+  --ok: #10B981;
+  --ok-text: #6EE7B7;
+  --ok-soft: rgba(16, 185, 129, .14);
+  --ok-line: rgba(16, 185, 129, .34);
+
+  --font: 'Inter var', Inter, -apple-system, BlinkMacSystemFont,
+    'Segoe UI Variable Text', 'Segoe UI', Roboto, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, monospace;
+
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  --swift: cubic-bezier(.4, 0, .2, 1);
+  --spring: cubic-bezier(.34, 1.4, .64, 1);
+
+  --r-xl: 20px;
+  --r-lg: 16px;
+  --r-md: 12px;
+  --r-sm: 9px;
+
+  /** The one inset every piece of chrome uses, on all four sides. */
+  --pad: 12px;
+  --gutter: 32px;
+
+  --lift: 0 1px 2px rgba(0, 0, 0, .45), 0 10px 28px -14px rgba(0, 0, 0, .85);
+  --pop: 0 2px 8px rgba(0, 0, 0, .45), 0 28px 64px -26px rgba(0, 0, 0, 1);
+  /* The top-edge highlight that makes a surface read as lit rather than drawn. */
+  --sheen-top: inset 0 1px 0 var(--sheen);
+
+  --titlebar: 48px;
+  --rail: 224px;
+  --statusbar: 30px;
+  --dock: 84px;
+
+  color-scheme: dark;
+}
+
+:root[data-accent='cyan'] {
+  --accent: #06B6D4; --accent-2: #22D3EE; --accent-text: #7DE9F8;
+  --accent-soft: rgba(6, 182, 212, .15); --accent-line: rgba(6, 182, 212, .42);
+  --accent-glow: rgba(6, 182, 212, .45);
+}
+:root[data-accent='violet'] {
+  --accent: #8B5CF6; --accent-2: #A78BFA; --accent-text: #C9B6FF;
+  --accent-soft: rgba(139, 92, 246, .15); --accent-line: rgba(139, 92, 246, .42);
+  --accent-glow: rgba(139, 92, 246, .45);
+}
+:root[data-accent='emerald'] {
+  --accent: #10B981; --accent-2: #34D399; --accent-text: #82EFC4;
+  --accent-soft: rgba(16, 185, 129, .15); --accent-line: rgba(16, 185, 129, .42);
+  --accent-glow: rgba(16, 185, 129, .45);
+}
+:root[data-accent='amber'] {
+  --accent: #F59E0B; --accent-2: #FBBF24; --accent-text: #FCD97D;
+  --accent-soft: rgba(245, 158, 11, .15); --accent-line: rgba(245, 158, 11, .42);
+  --accent-glow: rgba(245, 158, 11, .45);
+}
+:root[data-accent='rose'] {
+  --accent: #F43F5E; --accent-2: #FB7185; --accent-text: #FDA4AF;
+  --accent-soft: rgba(244, 63, 94, .15); --accent-line: rgba(244, 63, 94, .42);
+  --accent-glow: rgba(244, 63, 94, .45);
+}
+
+:root[data-theme='light'] {
+  --canvas: #F4F6FA;
+  --chrome: #FFFFFF;
+  --surface: #FFFFFF;
+  --raised: #F7F9FC;
+  --overlay: #FFFFFF;
+
+  --hairline: rgba(11, 18, 32, .08);
+  --edge: rgba(11, 18, 32, .14);
+  --edge-strong: rgba(11, 18, 32, .28);
+  --sheen: rgba(255, 255, 255, .9);
+
+  --text: #0A1020;
+  --dim: #4C5872;
+  --faint: #77839B;
+  --ghost: #9BA5B8;
+
+  --accent-text: #4338CA;
+  --accent-soft: rgba(99, 102, 241, .10);
+  --accent-line: rgba(99, 102, 241, .30);
+  --accent-glow: rgba(99, 102, 241, .28);
+
+  --shot-text: #0E7490;
+  --shot-soft: rgba(6, 182, 212, .10);
+  --shot-line: rgba(6, 182, 212, .26);
+
+  --rec-text: #BE123C;
+  --rec-soft: rgba(244, 63, 94, .10);
+  --rec-line: rgba(244, 63, 94, .26);
+
+  --warn-text: #92400E;
+  --warn-soft: rgba(245, 158, 11, .12);
+  --warn-line: rgba(245, 158, 11, .28);
+
+  --ok-text: #047857;
+  --ok-soft: rgba(16, 185, 129, .12);
+  --ok-line: rgba(16, 185, 129, .28);
+
+  --lift: 0 1px 2px rgba(16, 24, 40, .05), 0 8px 22px -12px rgba(16, 24, 40, .2);
+  --pop: 0 2px 8px rgba(16, 24, 40, .07), 0 26px 60px -24px rgba(16, 24, 40, .3);
+
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; margin: 0; overflow: hidden; }
+
+body {
+  display: grid;
+  grid-template-rows: var(--titlebar) 1fr var(--statusbar);
+  /* A very low-contrast wash, so the canvas is not a flat void behind the
+     chrome. Both stops are under 8% — any more and it reads as a gradient
+     rather than as light. */
+  background:
+    radial-gradient(120% 80% at 18% -10%, rgba(99, 102, 241, .07), transparent 62%),
+    radial-gradient(90% 70% at 100% 0%, rgba(6, 182, 212, .045), transparent 58%),
+    var(--canvas);
+  color: var(--text);
+  font: 13.5px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+::selection { background: var(--accent-soft); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--edge) transparent; }
+*::-webkit-scrollbar { width: 12px; height: 12px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--edge);
+  border: 4px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--edge-strong); background-clip: content-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* ══════════════════════════════════════════════════════════════ titlebar ═══ */
+
+.titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-left: 16px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--hairline);
+  -webkit-app-region: drag;
+}
+.titlebar > *:not(.tb-spacer) { -webkit-app-region: no-drag; }
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img { width: 22px; height: 22px; border-radius: 7px; display: block; }
+.brand b { font-size: 13px; font-weight: 640; letter-spacing: -.02em; }
+.tb-spacer { flex: 1; height: 100%; min-width: 12px; }
+
+/* The document, where a title bar puts one. Truncates rather than pushing the
+   window controls around. */
+.tb-title {
+  max-width: 46ch;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color .2s var(--swift);
+}
+
+/**
+ * Beside the brand, not adrift in the middle.
+ *
+ * It was centred in the window, which is at least honestly centred — but a lone
+ * pill floating in an otherwise empty title bar reads as an element that failed
+ * to dock somewhere. As the second item in a left-hand cluster it reads as what
+ * it is: the app saying what it is doing, next to the app's name.
+ *
+ * The middle of the title bar carries the open session instead, which is the
+ * one thing a title bar is traditionally for.
+ */
+.status-pill {
+  margin-left: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 14px 0 11px;
+  font: 500 11.5px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+  color: var(--dim);
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  box-shadow: var(--sheen-top);
+  white-space: nowrap;
+  transition: color .2s var(--swift), background .2s var(--swift), border-color .2s var(--swift);
+}
+.status-pill .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+.status-pill[data-phase='recording'] { color: var(--rec-text); background: var(--rec-soft); border-color: var(--rec-line); }
+.status-pill[data-phase='recording'] .dot { background: var(--rec); box-shadow: 0 0 0 3px var(--rec-soft); animation: blink 1.5s var(--swift) infinite; }
+.status-pill[data-phase='paused'] { color: var(--warn-text); background: var(--warn-soft); border-color: var(--warn-line); }
+.status-pill[data-phase='paused'] .dot { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.status-pill[data-phase='busy'] .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: blink 1s var(--swift) infinite; }
+@keyframes blink { 50% { opacity: .25; transform: scale(.7); } }
+
+.wincontrols { display: flex; height: 100%; z-index: 1; }
+.wincontrols button {
+  width: 46px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color .14s, background .14s;
+}
+.wincontrols button:hover { color: var(--text); background: var(--overlay); }
+.wincontrols button.close:hover { color: #fff; background: #E11D48; }
+.wincontrols svg { width: 13px; height: 13px; }
+
+/* ══════════════════════════════════════════════════════════════════ shell ═══ */
+
+.shell { display: grid; grid-template-columns: var(--rail) 1fr; min-height: 0; }
+
+/* One inset, all four sides. */
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--pad);
+  background: var(--chrome);
+  border-right: 1px solid var(--hairline);
+  overflow-y: auto;
+}
+
+.rail-label {
+  margin: 16px 10px 7px;
+  font: 500 9.5px/1.4 var(--mono);
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  color: var(--ghost);
+}
+.rail-label:first-child { margin-top: 4px; }
+
+/**
+ * Every rail child is exactly the same width.
+ *
+ * The selected state used to be a bar drawn in a `::before` at `left: -12px`,
+ * poking out through the rail's own padding — so the selected row read as wider
+ * than the rest and the column looked crooked. The indicator lives inside the
+ * row now, and the border is on every row whether or not it is selected, so
+ * nothing shifts by a pixel when the selection moves.
+ */
+.nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dim);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: color .16s var(--swift), background .16s var(--swift), border-color .16s var(--swift);
+}
+.nav:hover { color: var(--text); background: var(--raised); }
+.nav[aria-current='true'] {
+  color: var(--text);
+  background: linear-gradient(180deg, var(--accent-soft), transparent 140%), var(--raised);
+  border-color: var(--accent-line);
+  box-shadow: var(--sheen-top);
+}
+.nav svg { width: 16px; height: 16px; flex: none; transition: color .16s var(--swift); }
+.nav[aria-current='true'] svg { color: var(--accent-text); }
+.nav .count {
+  margin-left: auto;
+  min-width: 22px;
+  padding: 0 6px;
+  font: 500 10px/18px var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--faint);
+  background: var(--overlay);
+  border-radius: 999px;
+}
+.nav[aria-current='true'] .count { color: var(--accent-text); background: var(--accent-soft); }
+
+.rail-foot { margin-top: auto; padding-top: 16px; }
+
+.session-card {
+  padding: 13px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sheen-top);
+}
+.session-card .eyebrow { margin: 0 0 7px; }
+.session-card .name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 580;
+  letter-spacing: -.012em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-card .facts {
+  margin: 5px 0 0;
+  font: 400 10px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+/* An even pair on a shared baseline, not two buttons that happen to be next to
+   each other and size themselves from their own labels. */
+.session-card .row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+.session-card .row .btn { justify-content: center; padding: 7px 6px; font-size: 11.5px; gap: 6px; }
+
+/* ═════════════════════════════════════════════════════════════════ views ═══ */
+
+.stage { min-width: 0; min-height: 0; overflow: hidden; display: grid; }
+
+.view { min-height: 0; overflow-y: auto; padding: 26px var(--gutter) 34px; }
+.view[hidden] { display: none; }
+.view:not([hidden]) { animation: view-in .24s var(--ease); }
+@keyframes view-in { from { opacity: 0; transform: translateY(7px); } }
+
+/* A view with a pinned action bar owns its own scroll area. */
+.view.split { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.view.split > .scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px var(--gutter);
+}
+
+.view-head { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 24px; }
+.view-head .body { flex: 1; min-width: 0; }
+.view-head h1 { margin: 0; font-size: 26px; font-weight: 680; letter-spacing: -.035em; }
+.view-head p { margin: 7px 0 0; max-width: 70ch; font-size: 13px; line-height: 1.6; color: var(--dim); }
+.view-head .actions { display: flex; gap: 8px; flex: none; padding-top: 4px; }
+
+.eyebrow {
+  margin: 0;
+  font: 500 9.5px/1.4 var(--mono);
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  color: var(--ghost);
+}
+.rule { display: flex; align-items: center; gap: 12px; margin: 26px 0 12px; }
+.rule .line { flex: 1; height: 1px; background: var(--hairline); }
+.rule:first-child { margin-top: 0; }
+
+/* ═════════════════════════════════════════════════════════════════ cards ═══ */
+
+.card {
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sheen-top);
+}
+.card > h2 { margin: 0 0 4px; font-size: 14.5px; font-weight: 620; letter-spacing: -.018em; }
+.card > p.sub { margin: 0 0 15px; font-size: 12px; line-height: 1.55; color: var(--faint); }
+
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+
+/* ──────────────────────────────────────────────────────── source picker ─── */
+
+.sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 12px; }
+
+.source {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color .16s var(--swift), transform .16s var(--ease), box-shadow .16s var(--swift);
+}
+.source:hover { transform: translateY(-2px); border-color: var(--edge); box-shadow: var(--lift); }
+.source[aria-pressed='true'] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line), var(--lift); }
+.source .frame {
+  aspect-ratio: 16 / 10;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline);
+}
+.source .frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.source .frame .none { font-size: 11px; color: var(--ghost); }
+.source .meta { display: flex; align-items: center; gap: 8px; padding: 10px 11px; min-width: 0; }
+.source .meta img { width: 15px; height: 15px; flex: none; border-radius: 4px; }
+.source .meta > svg { width: 14px; height: 14px; flex: none; color: var(--faint); }
+.source .meta span {
+  flex: 1; min-width: 0;
+  font-size: 12px; font-weight: 490;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.source .tick {
+  position: absolute;
+  right: 9px; top: 9px;
+  width: 21px; height: 21px;
+  display: none; place-items: center;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .5);
+}
+.source[aria-pressed='true'] .tick { display: grid; }
+.source .tick svg { width: 10px; height: 10px; }
+
+/* ─────────────────────────────────────────────────────────────── segments ─ */
+
+.seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 13px;
+}
+.seg button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 520;
+  color: var(--faint);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .18s var(--swift), background .18s var(--swift), border-color .18s var(--swift);
+}
+.seg button:hover:not(:disabled) { color: var(--dim); }
+.seg button[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--overlay);
+  border-color: var(--hairline);
+  box-shadow: var(--sheen-top), var(--lift);
+}
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.seg button svg { width: 15px; height: 15px; }
+
+/* ──────────────────────────────────────────────────────────────── rows ─── */
+
+.rows { overflow: hidden; background: var(--raised); border: 1px solid var(--hairline); border-radius: var(--r-md); }
+.row { display: flex; align-items: center; gap: 13px; padding: 13px 14px; transition: background .14s var(--swift); }
+.row + .row { border-top: 1px solid var(--hairline); }
+.row:hover { background: var(--overlay); }
+.row > svg { flex: none; width: 16px; height: 16px; color: var(--faint); }
+.row .body { flex: 1; min-width: 0; }
+.row .label { display: block; font-size: 13px; font-weight: 510; }
+.row .sub { display: block; margin-top: 4px; font-size: 11.5px; line-height: 1.5; color: var(--faint); }
+.row .trail { flex: none; font: 400 11px/1 var(--mono); color: var(--faint); }
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 40px; height: 23px;
+  padding: 0;
+  background: var(--edge);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .22s var(--ease), box-shadow .22s var(--ease);
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 17px; height: 17px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+  transition: left .22s var(--ease), width .22s var(--ease);
+}
+.switch:active:not(:disabled)::after { width: 21px; }
+.switch[aria-checked='true'] { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.switch[aria-checked='true']::after { left: 20px; }
+.switch[aria-checked='true']:active:not(:disabled)::after { left: 16px; }
+.switch:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ─────────────────────────────────────────────────────────────── buttons ─── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  font-size: 12.5px;
+  font-weight: 530;
+  color: var(--dim);
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .15s var(--swift), background .15s var(--swift),
+    border-color .15s var(--swift), transform .12s var(--ease);
+}
+.btn:hover:not(:disabled) { color: var(--text); background: var(--overlay); border-color: var(--edge); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn svg { width: 14px; height: 14px; flex: none; }
+.btn.quiet { background: none; }
+.btn.quiet:hover:not(:disabled) { background: var(--raised); }
+.btn.danger { color: var(--rec-text); }
+.btn.danger:hover:not(:disabled) { background: var(--rec-soft); border-color: var(--rec-line); }
+.btn.icon { padding: 9px; }
+
+.cta {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  height: 52px;
+  padding: 0 26px;
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 640;
+  letter-spacing: -.015em;
+  color: #fff;
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border: 0;
+  border-radius: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 8px 24px -10px var(--accent-glow);
+  transition: box-shadow .18s var(--swift), transform .14s var(--ease), opacity .18s;
+}
+.cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 14px 32px -10px var(--accent-glow);
+}
+.cta:active:not(:disabled) { transform: translateY(0); }
+.cta:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+.cta svg { width: 18px; height: 18px; flex: none; }
+.cta .kbd { color: rgba(255, 255, 255, .94); background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .28); }
+
+.cta.rec {
+  background: linear-gradient(180deg, #FB7185, #E11D48);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .24), 0 8px 24px -10px rgba(244, 63, 94, .6);
+}
+.cta.rec.live {
+  color: var(--rec-text);
+  background: var(--rec-soft);
+  box-shadow: inset 0 0 0 1px var(--rec-line);
+}
+.cta.rec.live::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 0 var(--rec-line);
+  animation: ring 2.1s var(--swift) infinite;
+}
+@keyframes ring { to { box-shadow: 0 0 0 14px rgba(244, 63, 94, 0); } }
+.cta.rec.live .kbd { color: var(--rec-text); background: transparent; border-color: var(--rec-line); }
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 8px;
+  font: 500 10.5px/1 var(--mono);
+  color: var(--faint);
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+
+.pausebtn {
+  flex: none;
+  width: 56px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  color: var(--warn-text);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background .16s var(--swift), transform .12s var(--ease);
+}
+.pausebtn:hover { background: color-mix(in srgb, var(--warn-soft) 55%, var(--warn) 14%); }
+.pausebtn:active { transform: translateY(1px); }
+.pausebtn svg { width: 18px; height: 18px; }
+
+/* ═══════════════════════════════════════════════════════════════════ dock ══ */
+
+/**
+ * The action bar, and the reason it is a grid.
+ *
+ * It used to be a flex row of whatever each view happened to put in it, so the
+ * primary action was a different width and a different distance from the edge
+ * on every screen — "Start recording" ended up a 450px button stranded in the
+ * middle of a 1470px bar with nothing to its right. Now every view fills the
+ * same two regions: context on the left, the action on the right, hard against
+ * the gutter. Same size, same place, on all three — which is the thing the eye
+ * actually checks when it moves between views.
+ */
+.dock {
+  flex: none;
+  min-height: var(--dock);
+  display: flex;
+  align-items: center;
+  padding: 14px var(--gutter);
+  background: color-mix(in srgb, var(--chrome) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border-top: 1px solid var(--hairline);
+}
+.dock-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+.dock-context { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.dock-context .seg { flex: 0 0 320px; }
+.dock-context .hint { min-width: 0; font: 400 11.5px/1.5 var(--mono); color: var(--faint); }
+.dock-action { display: flex; align-items: center; gap: 10px; }
+.dock-action .cta { min-width: 268px; }
+
+/* ───────────────────────────────────────────────────────────────── fields ─ */
+
+.field { display: block; margin-bottom: 15px; }
+.field:last-child { margin-bottom: 0; }
+.field > span.lab { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 520; color: var(--dim); }
+
+.input {
+  width: 100%;
+  height: 40px;
+  padding: 0 13px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  user-select: text;
+  transition: border-color .16s var(--swift), box-shadow .16s var(--swift);
+}
+.input:hover { border-color: var(--edge); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input::placeholder { color: var(--ghost); }
+
+.slider { display: flex; align-items: center; gap: 16px; }
+.slider input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 5px;
+  margin: 0;
+  appearance: none;
+  background: var(--edge);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.slider input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 17px; height: 17px;
+  background: var(--accent);
+  border: 3px solid var(--surface);
+  border-radius: 50%;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .5);
+  cursor: grab;
+}
+.slider input[type='range']:disabled { opacity: .45; cursor: not-allowed; }
+.slider output {
+  min-width: 52px;
+  font: 500 11.5px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--dim);
+}
+
+.swatches { display: flex; gap: 9px; }
+.swatches button {
+  width: 32px; height: 32px;
+  padding: 0;
+  background: var(--sw);
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), inset 0 0 0 1px rgba(0, 0, 0, .18);
+  transition: transform .18s var(--spring), box-shadow .16s var(--swift);
+}
+.swatches button:hover { transform: scale(1.12); }
+.swatches button[aria-pressed='true'] {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 0 0 2px var(--surface), 0 0 0 4px var(--sw);
+}
+.swatches [data-accent='indigo'], .swatches [data-color='indigo'] { --sw: #6366F1; }
+.swatches [data-accent='cyan'], .swatches [data-color='cyan'] { --sw: #06B6D4; }
+.swatches [data-accent='violet'] { --sw: #8B5CF6; }
+.swatches [data-accent='emerald'], .swatches [data-color='green'] { --sw: #10B981; }
+.swatches [data-accent='amber'], .swatches [data-color='amber'] { --sw: #F59E0B; }
+.swatches [data-accent='rose'], .swatches [data-color='red'] { --sw: #F43F5E; }
+
+/* ═══════════════════════════════════════════════════════════════ settings ══ */
+
+/**
+ * A section index beside the sections.
+ *
+ * Seven headings is more than anyone scrolls through hunting for one switch, so
+ * the left column is both a jump list and a table of contents — the desktop
+ * convention for a settings page past about two screens.
+ */
+.settings { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 28px; align-items: start; }
+
+.set-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.set-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  font-size: 12.5px;
+  font-weight: 510;
+  color: var(--faint);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: color .16s var(--swift), background .16s var(--swift), border-color .16s var(--swift);
+}
+.set-link:hover { color: var(--dim); background: var(--raised); }
+.set-link[aria-current='true'] {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.set-link svg { width: 15px; height: 15px; flex: none; }
+.set-link[aria-current='true'] svg { color: var(--accent-text); }
+
+.set-body { display: flex; flex-direction: column; gap: 16px; }
+/* Room to scroll the last section under the top, so the jump list can reach it. */
+.set-body::after { content: ''; display: block; height: 40vh; }
+
+.set-card > h2 { display: flex; align-items: center; gap: 10px; }
+.set-card > h2 svg { width: 16px; height: 16px; color: var(--faint); }
+
+/* A control that needs its own line rather than a trailing widget. A three-way
+   segment stretched across 1000px reads as a toolbar, not as a choice, so the
+   line is capped at the width the options actually need. */
+.row.stacked { display: block; }
+.row.stacked .body > .label { margin-bottom: 10px; }
+.row.stacked .seg { max-width: 460px; }
+
+/* Six buttons drawn as the corner they mean, so the choice is spatial rather
+   than a list of words to read. */
+.corners { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; max-width: 264px; }
+.corners button {
+  position: relative;
+  height: 42px;
+  padding: 0;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color .16s var(--swift), background .16s var(--swift);
+}
+.corners button:hover:not(:disabled) { border-color: var(--edge); }
+.corners button:disabled { opacity: .45; cursor: not-allowed; }
+.corners button i {
+  position: absolute;
+  width: 16px; height: 5px;
+  background: var(--faint);
+  border-radius: 3px;
+  transition: background .16s var(--swift);
+}
+.corners button[data-corner^='t'] i { top: 9px; }
+.corners button[data-corner^='b'] i { bottom: 9px; }
+.corners button[data-corner$='l'] i { left: 9px; }
+.corners button[data-corner$='r'] i { right: 9px; }
+.corners button[data-corner$='c'] i { left: 50%; transform: translateX(-50%); }
+.corners button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent-line); }
+.corners button[aria-pressed='true'] i { background: var(--accent-text); }
+
+/* ════════════════════════════════════════════════════════════════ library ══ */
+
+.library { display: grid; grid-template-columns: 272px minmax(0, 1fr); gap: 26px; align-items: start; }
+
+.sessions { display: flex; flex-direction: column; gap: 7px; }
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 13px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  box-shadow: var(--sheen-top);
+  transition: border-color .16s var(--swift), background .16s var(--swift), transform .12s var(--ease);
+}
+.session-row:hover { border-color: var(--edge); transform: translateX(2px); }
+.session-row[aria-current='true'] {
+  background: linear-gradient(180deg, var(--accent-soft), transparent 140%), var(--surface);
+  border-color: var(--accent-line);
+}
+/* Without an explicit size an inline SVG in a flex row grows to fill it, which
+   is how this one reached 380px and squeezed the label to one word per line. */
+.session-row > svg { flex: none; width: 17px; height: 17px; color: var(--faint); }
+.session-row[aria-current='true'] > svg { color: var(--accent-text); }
+.session-row .body { flex: 1; min-width: 0; }
+.session-row b {
+  display: block;
+  font-size: 12.5px; font-weight: 570;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-row span { display: block; margin-top: 4px; font: 400 10px/1.4 var(--mono); color: var(--faint); }
+
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); gap: 13px; }
+
+.shot {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color .16s var(--swift), transform .16s var(--ease), box-shadow .16s var(--swift);
+}
+.shot:hover { transform: translateY(-3px); box-shadow: var(--lift); border-color: var(--edge); }
+.shot img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  opacity: .45;
+  filter: saturate(.65);
+  transition: opacity .18s var(--swift), filter .18s var(--swift);
+}
+.shot[aria-pressed='true'] { border-color: var(--accent); }
+.shot[aria-pressed='true'] img { opacity: 1; filter: none; }
+.shot .n {
+  position: absolute;
+  left: 8px; top: 8px;
+  min-width: 20px; height: 20px;
+  display: grid; place-items: center;
+  padding: 0 6px;
+  font: 600 10px/1 var(--mono);
+  color: #fff;
+  background: var(--shot);
+  border-radius: 7px;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .5);
+}
+.shot .tick {
+  position: absolute;
+  right: 8px; top: 8px;
+  width: 20px; height: 20px;
+  display: none; place-items: center;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .5);
+}
+.shot[aria-pressed='true'] .tick { display: grid; }
+.shot .tick svg { width: 10px; height: 10px; }
+.shot .cap {
+  display: block;
+  padding: 9px 10px;
+  font-size: 11px;
+  color: var(--dim);
+  text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-top: 1px solid var(--hairline);
+}
+
+.tapes { display: flex; flex-direction: column; gap: 9px; }
+.tape {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 12px 13px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--sheen-top);
+  transition: border-color .16s var(--swift), background .16s var(--swift);
+}
+.tape[data-on='true'] { background: var(--rec-soft); border-color: var(--rec-line); }
+.tape .pick {
+  flex: none;
+  width: 20px; height: 20px;
+  display: grid; place-items: center;
+  padding: 0;
+  color: transparent;
+  background: transparent;
+  border: 1.5px solid var(--edge);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background .14s, border-color .14s, color .14s;
+}
+.tape[data-on='true'] .pick { color: #fff; background: var(--rec); border-color: var(--rec); }
+.tape .pick svg { width: 10px; height: 10px; }
+.tape .play {
+  flex: none;
+  width: 40px; height: 40px;
+  display: grid; place-items: center;
+  color: #fff;
+  background: linear-gradient(180deg, #FB7185, #E11D48);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 4px 14px -6px rgba(244, 63, 94, .7);
+  transition: transform .18s var(--spring);
+}
+.tape .play:hover { transform: scale(1.08); }
+.tape .play svg { width: 14px; height: 14px; margin-left: 2px; }
+.tape .body { flex: 1; min-width: 0; }
+.tape .body b { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 570; }
+.tape .body .when { font: 400 10px/1 var(--mono); color: var(--faint); }
+.tape .body span.facts { display: block; margin-top: 4px; font: 400 10.5px/1.4 var(--mono); color: var(--dim); }
+
+/* ═══════════════════════════════════════════════════════════════ notices ═══ */
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--warn-text);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+}
+.note.ok { color: var(--ok-text); background: var(--ok-soft); border-color: var(--ok-line); }
+.note.bad { color: var(--rec-text); background: var(--rec-soft); border-color: var(--rec-line); }
+.note svg { flex: none; width: 15px; height: 15px; margin-top: 1px; }
+
+/* `.full` centres in the whole view; the plain one centres in whatever column
+   it was put in, which is right when that column is where content would go. */
+.empty.full {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 58vh;
+}
+.empty {
+  padding: 64px 24px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--faint);
+}
+.empty .glyph {
+  width: 56px; height: 56px;
+  display: grid; place-items: center;
+  margin: 0 auto 16px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  box-shadow: var(--sheen-top);
+}
+.empty svg { width: 22px; height: 22px; opacity: .55; }
+.empty b { display: block; margin-bottom: 5px; font-size: 14.5px; font-weight: 580; color: var(--dim); }
+
+.toasts {
+  position: fixed;
+  right: 20px; bottom: calc(var(--statusbar) + 16px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  max-width: 400px;
+  padding: 12px 16px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--overlay);
+  border: 1px solid var(--edge);
+  border-radius: 13px;
+  box-shadow: var(--pop), var(--sheen-top);
+  animation: toast-in .3s var(--ease);
+}
+.toast.leaving { animation: toast-out .2s var(--swift) forwards; }
+.toast .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.toast.bad .dot { background: var(--rec); }
+.toast.warn .dot { background: var(--warn); }
+.toast .go {
+  margin-left: 4px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(.96); } }
+@keyframes toast-out { to { opacity: 0; transform: translateX(18px); } }
+
+/* ═════════════════════════════════════════════════════════════ statusbar ═══ */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  font: 400 10.5px/1 var(--mono);
+  color: var(--ghost);
+  background: var(--chrome);
+  border-top: 1px solid var(--hairline);
+}
+.statusbar .sep { width: 1px; height: 12px; background: var(--hairline); }
+.statusbar button {
+  padding: 4px 7px;
+  font: inherit;
+  color: var(--ghost);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.statusbar button:hover { color: var(--dim); background: var(--raised); }
+.statusbar .push { margin-left: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

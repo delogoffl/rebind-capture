@@ -1,0 +1,105 @@
+{
+  "name": "rebind-capture",
+  "productName": "Rebind Capture",
+  "version": "0.1.0",
+  "description": "Desktop step capture and screen recording. Turns a click-through into numbered, timestamped evidence and exports it as a PDF, PNGs, Markdown or video.",
+  "keywords": [
+    "screenshot",
+    "screen-recorder",
+    "step-capture",
+    "documentation",
+    "qa",
+    "evidence",
+    "electron"
+  ],
+  "license": "MIT",
+  "author": "Delog Pvt Ltd",
+  "homepage": "https://github.com/delogdev/rebind-capture#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/delogdev/rebind-capture.git"
+  },
+  "bugs": {
+    "url": "https://github.com/delogdev/rebind-capture/issues"
+  },
+  "type": "module",
+  "main": "main.cjs",
+  "files": [
+    "main.cjs",
+    "preload.cjs",
+    "lib/",
+    "renderer/",
+    "windows/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --devtools",
+    "icons": "node scripts/make-icons.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^38.2.2",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.rebind.capture",
+    "productName": "Rebind Capture",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "lib/**/*",
+      "renderer/**/*",
+      "windows/**/*",
+      "LICENSE",
+      "README.md"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility"
+    }
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.5"
+  }
+}

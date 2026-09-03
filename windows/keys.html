@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' capture:; style-src 'self' 'unsafe-inline'; script-src 'self' capture:">
+  <title>Keys</title>
+  <style>
+    /*
+     * The keypress HUD.
+     *
+     * A full-screen transparent window that is click-through — `main.cjs` calls
+     * `setIgnoreMouseEvents`, without which this would swallow every click on
+     * the desktop. Nothing here is interactive; it is a layer that draws.
+     *
+     * Everything that can be configured is a custom property, so a settings
+     * change is one `setProperty` rather than a rebuild of the tree — which
+     * matters because these change while caps are on screen and the ones
+     * already up should simply resize.
+     */
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    #strip {
+      position: fixed;
+      display: flex;
+      align-items: flex-end;
+      gap: var(--gap, 6px);
+      /* Wrapping away from the pinned edge, so a long burst grows into the
+         screen rather than off the top or the bottom of it. */
+      flex-wrap: wrap-reverse;
+      max-width: 70vw;
+    }
+    #strip.top { flex-wrap: wrap; align-items: flex-start; }
+
+    .cap {
+      min-width: var(--h, 34px);
+      height: var(--h, 34px);
+      padding: 0 var(--pad, 11px);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font: 600 var(--font, 14px)/1 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .02em;
+      color: var(--fg, #F3F5FA);
+      background: var(--bg, rgba(14, 18, 30, .92));
+      border: 1px solid var(--edge, rgba(255, 255, 255, .22));
+      /* The bottom edge heavier than the rest — what makes a rectangle read as
+         a key rather than as a label. */
+      border-bottom-width: 3px;
+      border-radius: var(--radius, 8px);
+      box-shadow: 0 6px 20px -6px rgba(0, 0, 0, .7);
+      animation: pop .16s cubic-bezier(.34, 1.4, .64, 1);
+      white-space: pre;
+    }
+    .cap.going { opacity: 0; transform: translateY(4px) scale(.96); transition: opacity .22s, transform .22s; }
+
+    @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.9); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .cap { animation: none; }
+      .cap.going { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="strip"></div>
+  <script type="module" src="keys.js"></script>
+</body>
+</html>

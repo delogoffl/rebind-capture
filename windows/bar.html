@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' capture:; style-src 'self' 'unsafe-inline'; script-src 'self' capture:">
+  <title>Recording</title>
+  <style>
+    /*
+     * The floating transport.
+     *
+     * Its own window rather than something drawn inside the app, because the
+     * app window is the thing you stop looking at the moment you start
+     * recording. Always on top, on every workspace, and — where the platform
+     * allows it — excluded from the capture it controls, so the controls are on
+     * screen for the user and absent from the file.
+     *
+     * The window itself is transparent; this pill is the only thing painted,
+     * which is why the body has no background and nothing has a margin.
+     */
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      cursor: default;
+      font: 500 13px/1 'Inter var', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      color: #F4F7FF;
+    }
+
+    /* Centred in a window that is deliberately taller than it needs, so a
+       fractional scale factor cannot round the bottom edge — or its shadow —
+       off the end of the window. */
+    body { display: grid; place-items: center; }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      height: 46px;
+      padding: 0 8px 0 2px;
+      background: rgba(11, 16, 30, .95);
+      border: 1px solid rgba(148, 163, 184, .22);
+      border-radius: 999px;
+      box-shadow: 0 18px 46px -16px rgba(0, 0, 0, .95), 0 2px 8px rgba(0, 0, 0, .5);
+      animation: in .3s cubic-bezier(.22, 1, .36, 1);
+    }
+    @keyframes in { from { opacity: 0; transform: translateY(10px) scale(.95); } }
+
+    /* The only draggable region, so a stray click on the pill cannot move a
+       window the user was trying to press a button on. */
+    .grip {
+      width: 24px; height: 34px;
+      display: grid; place-items: center;
+      color: rgba(148, 163, 184, .5);
+      -webkit-app-region: drag;
+      cursor: grab;
+    }
+    .grip:active { cursor: grabbing; }
+    .grip svg { width: 15px; height: 15px; }
+
+    .dot {
+      width: 9px; height: 9px;
+      margin: 0 2px 0 4px;
+      border-radius: 50%;
+      background: #F43F5E;
+      box-shadow: 0 0 0 3px rgba(244, 63, 94, .22);
+      animation: blink 1.5s cubic-bezier(.4, 0, .2, 1) infinite;
+    }
+    body[data-phase='paused'] .dot {
+      background: #F59E0B;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, .22);
+      animation: none;
+    }
+    @keyframes blink { 50% { opacity: .25; } }
+
+    .time {
+      min-width: 52px;
+      padding: 0 8px 0 4px;
+      font: 600 14px/1 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: .01em;
+    }
+
+    button.act {
+      all: unset;
+      width: 34px; height: 34px;
+      display: grid; place-items: center;
+      color: #CBD5E1;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: background .14s, color .14s, transform .14s;
+    }
+    button.act:hover { color: #fff; background: rgba(148, 163, 184, .16); }
+    button.act:active { transform: scale(.9); }
+    button.act svg { width: 16px; height: 16px; pointer-events: none; }
+    button.stop { color: #fff; background: #F43F5E; }
+    button.stop:hover { color: #fff; background: #E11D48; }
+
+    .shield {
+      display: grid; place-items: center;
+      width: 22px;
+      color: rgba(110, 231, 183, .85);
+    }
+    .shield svg { width: 13px; height: 13px; }
+    .shield[hidden] { display: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body data-phase="recording">
+  <div class="pill">
+    <span class="grip" title="Drag to move">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+        <path d="M9 6.5h.01M9 12h.01M9 17.5h.01M15 6.5h.01M15 12h.01M15 17.5h.01"/>
+      </svg>
+    </span>
+    <span class="dot"></span>
+    <span class="time" id="time">00:00</span>
+
+    <span class="shield" id="shield" title="Hidden from the recording">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2.6 4.2 5.8v6.1c0 4.6 3.2 8.4 7.8 9.5 4.6-1.1 7.8-4.9 7.8-9.5V5.8Z"/>
+        <path d="M8.8 12.1 11 14.3l4.2-4.4"/>
+      </svg>
+    </span>
+
+    <button class="act" id="pause" type="button" title="Pause" aria-label="Pause recording"></button>
+    <button class="act stop" id="stop" type="button" title="Stop and save" aria-label="Stop and save">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 7.5h9v9h-9z"/></svg>
+    </button>
+  </div>
+
+  <script type="module" src="bar.js"></script>
+</body>
+</html>

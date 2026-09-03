@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' capture:; style-src 'self' 'unsafe-inline'; script-src 'self' capture:">
+  <title>Starting</title>
+  <style>
+    /*
+     * The count-in, over everything.
+     *
+     * By the time this counts, the app has minimised itself out of the way — so
+     * a number drawn inside the app window would be counting down behind the
+     * taskbar. It has to be over whatever is about to be recorded.
+     *
+     * Click-through (`setIgnoreMouseEvents` in main) and content-protected, so
+     * it is not in the first second of the take it is counting into.
+     */
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      pointer-events: none;
+      user-select: none;
+      font: 500 16px/1 'Inter var', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      color: #F3F5FA;
+    }
+
+    #wrap {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+    }
+
+    #ring {
+      position: relative;
+      width: 180px;
+      height: 180px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 40%, rgba(20, 26, 42, .82), rgba(8, 10, 16, .88));
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, .1),
+        0 0 0 1px rgba(255, 255, 255, .1),
+        0 30px 90px -30px rgba(0, 0, 0, 1);
+      backdrop-filter: blur(14px) saturate(1.3);
+      -webkit-backdrop-filter: blur(14px) saturate(1.3);
+    }
+
+    /* A ring that sweeps once per second, so the wait has a shape rather than
+       being a number that changes when it feels like it. */
+    #sweep {
+      position: absolute;
+      inset: -3px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      border-top-color: #F43F5E;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #n {
+      font: 700 84px/1 'Inter var', Inter, -apple-system, system-ui, sans-serif;
+      letter-spacing: -.05em;
+      font-variant-numeric: tabular-nums;
+      /* Re-keyed on every tick so the pop restarts. */
+      animation: pop .4s cubic-bezier(.22, 1, .36, 1);
+    }
+    @keyframes pop { from { opacity: 0; transform: scale(.6); } }
+
+    #label {
+      position: absolute;
+      bottom: -46px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 520;
+      color: #98A0B2;
+      background: rgba(11, 14, 22, .9);
+      border: 1px solid rgba(255, 255, 255, .1);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #sweep { animation: none; }
+      #n { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="ring">
+      <div id="sweep"></div>
+      <div id="n">3</div>
+      <div id="label">Recording starts in…</div>
+    </div>
+  </div>
+  <script type="module" src="countdown.js"></script>
+</body>
+</html>

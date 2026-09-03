@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' capture:; style-src 'self' 'unsafe-inline'; script-src 'self' capture:">
+  <title>Select a region</title>
+  <style>
+    /*
+     * The region overlay: one of these per display, each sized to its own.
+     *
+     * The dimming is a huge `box-shadow` spread on the selection rather than
+     * four positioned panels around it. One element, no seams, and the browser
+     * composites it — four panels have to be repositioned on every pointer move
+     * and show hairline gaps at fractional scale factors.
+     */
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      cursor: crosshair;
+      user-select: none;
+      font: 500 12px/1 'Inter var', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      color: #F4F7FF;
+    }
+
+    /* Before the first drag the whole screen dims; the shadow takes over after. */
+    .veil { position: fixed; inset: 0; background: rgba(6, 10, 20, .42); }
+    .veil.gone { background: transparent; }
+
+    .box {
+      position: fixed;
+      display: none;
+      border: 1px solid #06B6D4;
+      background: rgba(6, 182, 212, .10);
+      box-shadow: 0 0 0 100vmax rgba(6, 10, 20, .42);
+    }
+    .box.on { display: block; }
+
+    /* Corner ticks, so the exact edge is visible against a busy background. */
+    .box i {
+      position: absolute;
+      width: 12px; height: 12px;
+      border: 2px solid #22D3EE;
+    }
+    .box i.tl { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+    .box i.tr { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
+    .box i.bl { bottom: -1px; left: -1px; border-right: 0; border-top: 0; }
+    .box i.br { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+    .size {
+      position: absolute;
+      left: 0; top: -28px;
+      padding: 4px 9px;
+      font: 600 11.5px/1 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
+      color: #041016;
+      background: #22D3EE;
+      border-radius: 6px;
+      white-space: nowrap;
+      box-shadow: 0 4px 14px -4px rgba(0, 0, 0, .8);
+    }
+    /* Flipped inside when the selection is against the top edge, where a label
+       above it would be off screen. */
+    .size.inside { top: 6px; left: 6px; }
+
+    .hint {
+      position: fixed;
+      left: 50%;
+      bottom: 48px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 18px;
+      background: rgba(11, 16, 30, .95);
+      border: 1px solid rgba(148, 163, 184, .22);
+      border-radius: 999px;
+      box-shadow: 0 18px 46px -16px rgba(0, 0, 0, .95);
+      transition: opacity .18s;
+    }
+    .hint.away { opacity: 0; }
+    .hint kbd {
+      padding: 3px 7px;
+      font: 500 10.5px/1 'JetBrains Mono', ui-monospace, monospace;
+      color: #CBD5E1;
+      background: rgba(148, 163, 184, .14);
+      border: 1px solid rgba(148, 163, 184, .28);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+    }
+    .hint span { color: #97A5C0; }
+
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="veil" id="veil"></div>
+  <div class="box" id="box">
+    <i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>
+    <span class="size" id="size">0 × 0</span>
+  </div>
+  <div class="hint" id="hint">
+    <span>Drag to select</span>
+    <kbd>Esc</kbd><span>cancel</span>
+  </div>
+  <script type="module" src="region.js"></script>
+</body>
+</html>
