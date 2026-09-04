@@ -177,6 +177,58 @@ const SECTIONS = [
       {
         kind: 'toggle', key: 'includeMeta', glyph: 'tag', label: 'Include metadata in exports',
         sub: 'YAML front matter in the Markdown report, and the facts line under each PDF page.'
+      },
+      {
+        kind: 'toggle', key: 'exportManifest', glyph: 'shield', label: 'Ship an integrity manifest',
+        sub: 'manifest.json and SHA256SUMS inside zip exports, so a recipient can check the pack with sha256sum. Single-file exports have nowhere to put it.',
+        needs: 'hashAssets'
+      }
+    ]
+  },
+  {
+    id: 'evidence',
+    title: 'Evidence',
+    glyph: 'shield',
+    blurb: 'What makes an export checkable rather than merely tidy. None of this proves where a screenshot came from — no offline tool can — but it makes alteration after the fact visible.',
+    rows: [
+      {
+        kind: 'toggle', key: 'hashAssets', glyph: 'shield', label: 'Hash every capture',
+        sub: 'A SHA-256 recorded the moment the file is written, which is what Verify and the export manifest compare against later. Costs a hash of a few megabytes per capture.'
+      },
+      {
+        kind: 'toggle', key: 'autoHighlight', glyph: 'crop', label: 'Suggest what changed',
+        sub: 'When marking up a capture, offer dashed boxes around whatever differs from the previous step. A suggestion only — nothing is drawn until you click one.'
+      },
+      {
+        kind: 'swatch', key: 'annotateColor', label: 'Default mark colour',
+        options: ['red', 'amber', 'green', 'cyan', 'indigo']
+      },
+      {
+        kind: 'seg', key: 'annotateWeight', label: 'Default stroke',
+        options: [['sm', 'Fine'], ['md', 'Medium'], ['lg', 'Heavy']]
+      }
+    ]
+  },
+  {
+    id: 'steps',
+    title: 'Steps from recordings',
+    glyph: 'layers',
+    blurb: 'The input hook already runs during a take for the keypress HUD. Keeping what it saw means the frame at each click can be pulled out afterwards, turning one recording into a numbered document.',
+    rows: [
+      {
+        kind: 'toggle', key: 'autoSteps', glyph: 'layers', label: 'Track actions while recording',
+        sub: 'Stores the clicks and keys of a take alongside the video. Extraction is always a button afterwards — steps are never created without being asked for.'
+      },
+      {
+        kind: 'seg', key: 'autoStepsOn', label: 'What counts as a step',
+        options: [['clicks', 'Clicks only'], ['actions', 'Clicks and typing']],
+        needs: 'autoSteps'
+      },
+      {
+        kind: 'slider', key: 'autoStepsMax', glyph: 'gauge', label: 'Most steps from one recording',
+        sub: 'A long session contains hundreds of clicks, and a document with hundreds of steps is not a document. Over the ceiling, an even spread across the whole take is kept.',
+        min: 5, max: 60, step: 5, unit: '',
+        needs: 'autoSteps'
       }
     ]
   }

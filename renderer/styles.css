@@ -1366,3 +1366,429 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .shot:focus-within .shot-edit { opacity: 1; }
 .shot-edit:hover { background: var(--accent); border-color: transparent; transform: scale(1.06); }
 .shot-edit svg { width: 13px; height: 13px; }
+
+/* ─────────────────────────────────────────────────────── marking up a capture */
+
+/* The third tile control. Three 26px buttons in a row still leave two thirds of
+   a 184px tile showing the picture, which is what the grid is for. */
+.shot-mark {
+  position: absolute;
+  right: 71px;
+  bottom: 40px;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  padding: 0;
+  opacity: 0;
+  color: #fff;
+  background: rgba(12, 16, 26, .82);
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 9px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: opacity .14s var(--swift), background .14s var(--swift), transform .14s var(--ease);
+}
+.shot:hover .shot-mark,
+.shot:focus-within .shot-mark { opacity: 1; }
+.shot-mark:hover { background: var(--accent); border-color: transparent; transform: scale(1.06); }
+.shot-mark svg { width: 13px; height: 13px; }
+
+/* An annotated capture says so permanently, unlike the controls above, which
+   appear on hover. At thumbnail size a marked-up image and an untouched one
+   look alike, and which of the two you are about to attach to a ticket matters.
+   A redacted one is louder still: that is the tile whose original is gone. */
+.shot .marked {
+  position: absolute;
+  left: 7px; bottom: 40px;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  color: #fff;
+  background: rgba(12, 16, 26, .78);
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 7px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.shot .marked svg { width: 12px; height: 12px; }
+.shot .marked[data-redacted='true'] {
+  color: var(--rec-text);
+  background: var(--rec-soft);
+  border-color: var(--rec-line);
+}
+
+/* The editor fills the window rather than sitting in a card: the image is the
+   thing being worked on and every pixel given to chrome is a pixel of it you
+   cannot see. */
+.scrim.wide { padding: 0; }
+
+.editor {
+  width: min(1500px, calc(100vw - 40px));
+  height: calc(100vh - 40px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--overlay);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--pop);
+  overflow: hidden;
+  animation: confirm-in .22s var(--spring);
+}
+.scrim.leaving .editor { animation: none; }
+
+.edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--edge);
+  background: var(--chrome);
+  flex-wrap: wrap;
+}
+.edit-tools { display: flex; gap: 5px; }
+.edit-tools .tool {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 11px;
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background .14s var(--swift), color .14s var(--swift);
+}
+.edit-tools .tool:hover { color: var(--text); background: var(--sheen); }
+.edit-tools .tool[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--sheen);
+  border-color: var(--edge);
+}
+.edit-tools .tool svg { width: 15px; height: 15px; }
+
+/* The redact tool is coloured like the thing it does. A destructive tool that
+   looks like the other four is a destructive tool somebody picks by accident. */
+.edit-tools .tool[data-tool='redact'][aria-pressed='true'] {
+  color: var(--rec-text);
+  background: var(--rec-soft);
+  border-color: var(--rec-line);
+}
+
+.edit-style { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.swatches { display: flex; gap: 5px; }
+.swatches .swatch {
+  width: 22px; height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--swatch);
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
+  transition: transform .14s var(--ease), border-color .14s var(--swift);
+}
+.swatches .swatch:hover { transform: scale(1.12); }
+.swatches .swatch[aria-pressed='true'] { border-color: var(--text); transform: scale(1.12); }
+
+.weights { display: flex; gap: 3px; }
+.weights .weight {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.weights .weight:hover { background: var(--sheen); }
+.weights .weight[aria-pressed='true'] { background: var(--sheen); border-color: var(--edge); }
+.weights .weight i { display: block; width: 14px; background: var(--dim); border-radius: 2px; }
+.weights .weight[data-weight='sm'] i { height: 2px; }
+.weights .weight[data-weight='md'] i { height: 4px; }
+.weights .weight[data-weight='lg'] i { height: 6px; }
+.weights .weight[aria-pressed='true'] i { background: var(--text); }
+
+.edit-acts { display: flex; gap: 7px; }
+
+/* Chequered, so a transparent capture is obviously transparent rather than
+   looking like it has a white background that will not be there on export. */
+.edit-stage {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 16px;
+  background:
+    repeating-conic-gradient(var(--sheen) 0% 25%, transparent 0% 50%) 50% / 22px 22px;
+}
+.edit-canvas {
+  display: block;
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgba(4, 8, 18, .35);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.edit-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--edge);
+  font-size: 12.5px;
+  color: var(--dim);
+  min-height: 44px;
+}
+.edit-status { white-space: nowrap; }
+
+/* Shown only once a redaction exists, which is the moment it becomes true. A
+   warning about permanence that is always on screen is a warning nobody reads
+   by the time it matters. */
+.edit-warn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+  padding: 6px 11px;
+  color: var(--warn-text);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: 9px;
+  line-height: 1.4;
+}
+.edit-warn svg { width: 15px; height: 15px; flex: none; }
+
+@media (max-width: 900px) {
+  .edit-style { margin-left: 0; }
+  .edit-tools .tool span { display: none; }
+  .edit-warn { margin-left: 0; }
+}
+
+/* Arriving on the thing that was just made.
+
+   A session that already holds nine takes does not answer "where is the one I
+   just recorded" by merely being open, so the row says so for a moment. Two
+   seconds and gone: a permanent marker would still be there next time, and the
+   thing it means is "this is new", which stops being true. */
+@keyframes landed {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); border-color: var(--accent); }
+  70%  { box-shadow: 0 0 0 7px transparent; border-color: var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.tape.landed, .shot.landed {
+  animation: landed 1.9s var(--ease);
+  border-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The point is "this one" — a steady outline says it without the pulse. */
+  .tape.landed, .shot.landed { animation: none; border-color: var(--accent); }
+}
+
+/* ──────────────────────────────────────────────────────── the video player
+
+   The browser's own <video controls> was doing this job, and it was the wrong
+   tool twice over: it looks like a different application on every platform, and
+   it cannot say anything about what it is playing. The second is the real
+   reason to own this — a recording carries the clicks that happened during it,
+   and those go on the scrubber as ticks. A featureless bar becomes a map of the
+   take: dense where the work was, empty where you were reading. */
+
+.player {
+  width: min(1180px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--overlay);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-xl);
+  box-shadow: var(--pop), var(--sheen-top);
+  overflow: hidden;
+  animation: confirm-in .22s var(--spring);
+}
+.scrim.leaving .player { animation: none; }
+
+.pv-head {
+  display: flex; align-items: center; gap: 14px;
+  padding: 13px 14px 13px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.pv-title { display: grid; gap: 2px; margin-right: auto; }
+.pv-title b { font-size: 13.5px; letter-spacing: -.01em; }
+.pv-title span { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* The stage is black, not the panel colour: a recording of a dark application
+   should not appear to bleed into the chrome around it. */
+.pv-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  background: #000;
+  cursor: pointer;
+}
+.pv-video { display: block; max-width: 100%; max-height: calc(100vh - 230px); }
+
+/* Clicking the picture toggles playback, and this is the proof it did — the
+   controls can be the other side of a 1180px window. */
+.pv-flash {
+  position: absolute;
+  width: 66px; height: 66px;
+  display: grid; place-items: center;
+  color: #fff;
+  background: rgba(10, 12, 20, .55);
+  border-radius: 50%;
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  opacity: 0;
+  pointer-events: none;
+}
+.pv-flash svg { width: 26px; height: 26px; }
+.pv-flash.on { animation: pv-flash .5s var(--ease); }
+@keyframes pv-flash {
+  0% { opacity: 0; transform: scale(.82); }
+  22% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.22); }
+}
+
+.pv-foot { padding: 12px 16px 14px; display: grid; gap: 11px; }
+
+.pv-scrub { display: flex; align-items: center; gap: 12px; }
+.pv-time {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-width: 40px;
+}
+.pv-time.dim { color: var(--faint); text-align: right; }
+
+/* A generous hit area around a thin bar: the bar is 4px because that reads as
+   precise, and 4px is not something anyone can reliably hit. */
+.pv-rail {
+  position: relative;
+  flex: 1;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+.pv-rail::before {
+  content: '';
+  position: absolute; left: 0; right: 0;
+  height: 4px;
+  background: var(--edge);
+  border-radius: 99px;
+}
+.pv-buffered, .pv-played {
+  position: absolute; left: 0;
+  height: 4px;
+  border-radius: 99px;
+  pointer-events: none;
+}
+.pv-buffered { background: var(--edge-strong); }
+.pv-played { background: var(--accent); }
+.pv-rail:hover::before, .pv-rail:hover .pv-buffered, .pv-rail:hover .pv-played { height: 6px; }
+
+.pv-knob {
+  position: absolute;
+  width: 12px; height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .55);
+  pointer-events: none;
+  transform: scale(.001);
+  transition: transform .13s var(--spring);
+}
+.pv-rail:hover .pv-knob, .pv-rail:focus-visible .pv-knob { transform: scale(1); }
+.pv-rail:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* Where the clicks were. Ticks sit above the bar rather than on it, so a dense
+   run of actions never obscures the progress it is annotating. */
+.pv-ticks { position: absolute; left: 0; right: 0; height: 18px; pointer-events: none; }
+.pv-tick {
+  position: absolute;
+  top: 0;
+  width: 2px; height: 7px;
+  margin-left: -1px;
+  border-radius: 99px;
+  background: var(--shot);
+  opacity: .75;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: transform .12s var(--ease), opacity .12s var(--swift);
+}
+.pv-tick:hover { opacity: 1; transform: scaleY(1.5); background: var(--shot-text); }
+
+/* The time under the cursor, so scrubbing is aimed rather than hunted. */
+.pv-ghost {
+  position: absolute;
+  bottom: 22px;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--chrome);
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pv-acts { display: flex; align-items: center; gap: 6px; }
+.pv-gap { flex: 1; }
+
+.pv-btn {
+  height: 34px;
+  min-width: 34px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 0 8px;
+  font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color .13s var(--swift), background .13s var(--swift);
+}
+.pv-btn:hover { color: var(--text); background: var(--sheen); }
+.pv-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pv-btn svg { width: 15px; height: 15px; }
+.pv-btn.pv-wide { padding: 0 12px; color: var(--accent-text); background: var(--accent-soft); }
+.pv-btn.pv-wide:hover { color: #fff; background: var(--accent); }
+
+/* Play is the primary control and is sized to say so. */
+.pv-play {
+  width: 40px; height: 40px;
+  color: var(--text);
+  background: var(--sheen);
+  border-color: var(--edge);
+}
+.pv-play:hover { background: var(--edge); }
+.pv-play svg { width: 17px; height: 17px; }
+
+.pv-rate { font-variant-numeric: tabular-nums; min-width: 42px; }
+
+/* One circular-arrow glyph, mirrored for the backwards skip, with the seconds
+   set inside it — the icon set has no directional pair and two identical
+   buttons either side of play would read worse than one flipped. */
+.pv-back svg { transform: scaleX(-1); }
+.pv-back, .pv-fwd { position: relative; }
+.pv-secs {
+  position: absolute;
+  inset: 0;
+  display: grid; place-items: center;
+  font-size: 8.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  padding-top: 1px;
+}
+
+.pv-close svg { transform: rotate(45deg); width: 17px; height: 17px; }
+.pv-close:hover { color: var(--rec-text); background: var(--rec-soft); }
+
+.player:fullscreen { width: 100vw; max-height: 100vh; border: 0; border-radius: 0; }
+.player:fullscreen .pv-video { max-height: calc(100vh - 150px); }
+
+@media (max-width: 720px) {
+  .pv-rate, .pv-btn.pv-wide span { display: none; }
+}

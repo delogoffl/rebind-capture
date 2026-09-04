@@ -17,6 +17,7 @@ import assert from 'node:assert/strict'
 import { buildExport, estimate, outputName, humanBytes } from '../lib/export.js'
 import { markdown, frontMatter } from '../lib/report.js'
 import { newSession, addStep, addMedia } from '../lib/session.js'
+import { digest, manifestDigest, verifyManifest } from '../lib/manifest.js'
 
 /** A session with `steps` captures and `media` recordings, and a reader for it. */
 function fixture({ steps = 2, media = 0, label = 'Checkout run' } = {}) {
@@ -220,6 +221,192 @@ describe('the markdown report', () => {
     const text = frontMatter(session, [], {}).join('\n')
     // JSON quoting is valid YAML quoting, which is the point of using it.
     assert.ok(text.includes('\\"run it\\"'), text)
+  })
+})
+
+/**
+ * The integrity pack, end to end.
+ *
+ * The pieces are unit-tested in `manifest.test.mjs`; what matters here is that
+ * an export actually carries them, that the chain from report to manifest to
+ * image holds, and — most importantly — that the manifest never claims a file
+ * the pack does not contain, which would make an intact export verify as a
+ * broken one.
+ */
+describe('an export that can be checked', () => {
+  /** Read a stored-entry zip back out, which is enough to inspect a pack. */
+  function unzip(data) {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const files = new Map()
+    let at = 0
+    while (at + 4 <= data.length && view.getUint32(at, true) === 0x04034b50) {
+      const nameLen = view.getUint16(at + 26, true)
+      const extraLen = view.getUint16(at + 28, true)
+      const size = view.getUint32(at + 18, true)
+      const start = at + 30 + nameLen + extraLen
+      const name = new TextDecoder().decode(data.subarray(at + 30, at + 30 + nameLen))
+      files.set(name, data.subarray(start, start + size))
+      at = start + size
+    }
+    return files
+  }
+
+  const text = (bytes) => new TextDecoder().decode(bytes)
+
+  async function hashed({ steps = 2, media = 0 } = {}) {
+    const kit = fixture({ steps, media })
+    for (const step of kit.session.steps) step.sha256 = await digest(await kit.read(step.file))
+    for (const item of kit.session.media) item.sha256 = await digest(await kit.read(item.file))
+    return kit
+  }
+
+  test('a report pack carries a manifest and a checksum file', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+
+    const names = [...files.keys()]
+    assert.ok(names.includes('checkout-run/manifest.json'), names.join(', '))
+    assert.ok(names.includes('checkout-run/SHA256SUMS'), names.join(', '))
+  })
+
+  test('the manifest lists exactly the files the pack contains', async () => {
+    // A manifest that claims a file the zip does not hold makes an untouched
+    // pack verify as one with missing files — the failure mode that would make
+    // the whole feature untrustworthy.
+    const { session, read } = await hashed({ steps: 2, media: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, media: session.media, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+
+    for (const entry of manifest.entries) {
+      assert.ok(files.has(`checkout-run/${entry.path}`), `manifest claims ${entry.path}, which is not in the zip`)
+    }
+    // The report lists the recordings; the zip does not carry them, so the
+    // manifest must not claim them either.
+    assert.equal(manifest.entries.length, 2)
+    assert.deepEqual(manifest.entries.map((e) => e.path), ['steps/step-001.png', 'steps/step-002.png'])
+  })
+
+  test('the digests in the manifest are the digests of the bytes shipped', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+
+    for (const entry of manifest.entries) {
+      assert.equal(await digest(files.get(`checkout-run/${entry.path}`)), entry.sha256, entry.path)
+    }
+  })
+
+  test('the whole pack verifies as intact', async () => {
+    const { session, read } = await hashed({ steps: 3 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+
+    const actual = new Map()
+    for (const entry of manifest.entries) {
+      actual.set(entry.path, await digest(files.get(`checkout-run/${entry.path}`)))
+    }
+    const result = verifyManifest(manifest, actual)
+    assert.equal(result.intact, true, JSON.stringify(result))
+    assert.equal(result.checked, 3)
+  })
+
+  test('a tampered image is detected', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+
+    const actual = new Map()
+    for (const entry of manifest.entries) {
+      actual.set(entry.path, await digest(files.get(`checkout-run/${entry.path}`)))
+    }
+    actual.set('steps/step-001.png', await digest('a different picture'))
+
+    const result = verifyManifest(manifest, actual)
+    assert.equal(result.intact, false)
+    assert.deepEqual(result.modified, ['steps/step-001.png'])
+  })
+
+  test('the report quotes the manifest digest, and it is the real one', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+    const report = text(files.get('checkout-run/report.md'))
+
+    const quoted = report.match(/manifest_sha256: "([0-9a-f]{64})"/)?.[1]
+    assert.ok(quoted, 'the front matter has to carry the digest or the chain has no root')
+    assert.equal(quoted, await manifestDigest(manifest))
+    // And the manifest stamps the same value into itself, so a reader comparing
+    // the two files does not have to recompute anything to spot a mismatch.
+    assert.equal(manifest.self, quoted)
+  })
+
+  test('rewriting a digest to cover for a tampered image breaks the outer hash', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+    const report = text(files.get('checkout-run/report.md'))
+    const quoted = report.match(/manifest_sha256: "([0-9a-f]{64})"/)[1]
+
+    manifest.entries[0].sha256 = await digest('a different picture')
+    assert.notEqual(await manifestDigest(manifest), quoted)
+  })
+
+  test('the checksum file is what sha256sum -c reads', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const sums = text(unzip(built.files[0].data).get('checkout-run/SHA256SUMS'))
+
+    const lines = sums.trim().split('\n')
+    assert.equal(lines.length, 2)
+    for (const line of lines) assert.match(line, /^[0-9a-f]{64} {2}steps\/step-\d{3}\.png$/)
+  })
+
+  test('a steps zip carries one too', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('png', { session, steps: session.steps, read })
+    const names = [...unzip(built.files[0].data).keys()]
+    assert.ok(names.includes('checkout-run/manifest.json'), names.join(', '))
+  })
+
+  test('formats with nowhere to put it do not pretend to have one', async () => {
+    // A single PNG or a bare .mp4 is one file; writing a loose SHA256SUMS
+    // beside whatever the user picked would litter their Downloads folder.
+    const { session, read } = await hashed({ steps: 1, media: 1 })
+    const single = await buildExport('png', { session, steps: session.steps, read })
+    assert.equal(single.files.length, 1)
+    assert.match(single.files[0].name, /\.png$/)
+
+    const video = await buildExport('video', { session, media: session.media, read })
+    assert.equal(video.files.length, 1)
+    assert.match(video.files[0].name, /\.mp4$/)
+  })
+
+  test('it can be turned off', async () => {
+    const { session, read } = await hashed({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read, manifest: false })
+    const names = [...unzip(built.files[0].data).keys()]
+    assert.ok(!names.some((n) => n.endsWith('manifest.json')))
+    assert.ok(!text(unzip(built.files[0].data).get('checkout-run/report.md')).includes('manifest_sha256'))
+  })
+
+  test('an unhashed session still exports, and says the files are unhashed', async () => {
+    // Sessions captured before hashing existed have no digests. Refusing to
+    // export them would be the worst possible answer.
+    const { session, read } = fixture({ steps: 2 })
+    const built = await buildExport('md', { session, steps: session.steps, read })
+    const files = unzip(built.files[0].data)
+    const manifest = JSON.parse(text(files.get('checkout-run/manifest.json')))
+
+    assert.equal(manifest.counts.unhashed, 2)
+    assert.ok(!files.has('checkout-run/SHA256SUMS'),
+      'a checksum file with no lines would report success against nothing')
   })
 })
 

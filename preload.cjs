@@ -69,6 +69,8 @@ contextBridge.exposeInMainWorld('capture', {
     removeAsset: (payload) => ipcRenderer.invoke('library:removeAsset', payload),
     remove: (id) => ipcRenderer.invoke('library:delete', id),
     renumber: (payload) => ipcRenderer.invoke('library:renumber', payload),
+    /** Re-hash a session's files and compare them against what was recorded. */
+    verify: (id) => ipcRenderer.invoke('library:verify', id),
     stats: () => ipcRenderer.invoke('library:stats'),
     prune: () => ipcRenderer.invoke('library:prune'),
     reveal: (id) => ipcRenderer.invoke('library:reveal', id)
@@ -105,6 +107,20 @@ contextBridge.exposeInMainWorld('capture', {
     onDown: on('keys:down'),
     onConfig: on('keys:config'),
     onUnavailable: on('keys:unavailable')
+  },
+
+  /**
+   * What a take saw, for cutting a recording into steps.
+   *
+   * Separate from `keys` on purpose. These share a hook in main, but they are
+   * different features with different lifetimes — the HUD draws into the
+   * picture, and this never leaves the process until the take ends — and
+   * folding them into one namespace would invite wiring one switch to both.
+   */
+  marks: {
+    start: () => ipcRenderer.invoke('marks:start'),
+    stop: () => ipcRenderer.invoke('marks:stop'),
+    discard: () => ipcRenderer.invoke('marks:discard')
   },
 
   /**

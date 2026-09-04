@@ -39,6 +39,8 @@
     "dev": "electron . --devtools",
     "icons": "node scripts/make-icons.mjs",
     "test": "node --test \"test/*.test.mjs\"",
+    "probe": "node test/bets-probe.mjs",
+    "probe:seek": "node test/seek-probe.mjs",
     "dist": "electron-builder",
     "dist:dir": "electron-builder --dir",
     "dist:win": "electron-builder --win",

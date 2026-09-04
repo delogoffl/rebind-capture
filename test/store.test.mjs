@@ -17,7 +17,8 @@ import { join } from 'node:path'
 
 import {
   saveSession, loadSession, listSessions, deleteSession, writeAsset, readAsset,
-  removeAsset, applyRenames, libraryBytes, pruneEmpty, orphans, sessionDir, writeAtomic
+  removeAsset, applyRenames, libraryBytes, pruneEmpty, orphans, sessionDir, writeAtomic,
+  verifySession, hashAsset, originalName
 } from '../lib/store.js'
 import { newSession, addStep, addMedia, renumber, removeStep } from '../lib/session.js'
 
@@ -207,5 +208,88 @@ describe('housekeeping', () => {
     // Reported, not removed: in an evidence tool the orphan may be the only
     // copy of something that mattered.
     await readAsset(root, session.id, 'step-009.png')
+  })
+
+  test('the copy kept for undo is not an orphan', async () => {
+    const session = await seed('Undo copies', 1)
+    const step = session.steps[0]
+    await writeAsset(root, session.id, originalName(step.file), bytes(32))
+
+    assert.deepEqual(await orphans(root, session.id), [],
+      'reporting the undo copy as a stray file would invite deleting it')
+    assert.equal(originalName('step-004.png'), 'step-004.orig.png')
+  })
+})
+
+describe('verifying a session against itself', () => {
+  test('an untouched session is intact', async () => {
+    const session = await seed('Intact', 2, 1)
+    for (const step of session.steps) {
+      step.sha256 = await hashAsset(root, session.id, step.file)
+    }
+    for (const item of session.media) {
+      item.sha256 = await hashAsset(root, session.id, item.file)
+    }
+    await saveSession(root, session)
+
+    const result = await verifySession(root, session.id)
+    assert.equal(result.intact, true, JSON.stringify(result))
+    assert.equal(result.checked, 3)
+  })
+
+  test('a file edited in place is caught', async () => {
+    // What this is actually for: another program touching the file, a sync
+    // client resolving a conflict badly, a half-restored backup.
+    const session = await seed('Tampered', 2)
+    for (const step of session.steps) {
+      step.sha256 = await hashAsset(root, session.id, step.file)
+    }
+    await saveSession(root, session)
+
+    await writeAsset(root, session.id, session.steps[1].file, bytes(32, 99))
+
+    const result = await verifySession(root, session.id)
+    assert.equal(result.intact, false)
+    assert.deepEqual(result.modified, ['step-002.png'])
+    assert.deepEqual(result.ok, ['step-001.png'])
+  })
+
+  test('a deleted file is missing, not modified', async () => {
+    const session = await seed('Gone', 2)
+    for (const step of session.steps) {
+      step.sha256 = await hashAsset(root, session.id, step.file)
+    }
+    await saveSession(root, session)
+    await removeAsset(root, session.id, session.steps[0].file)
+
+    const result = await verifySession(root, session.id)
+    assert.deepEqual(result.missing, ['step-001.png'])
+    assert.deepEqual(result.modified, [])
+  })
+
+  test('a session captured before hashing existed is unverified, not broken', async () => {
+    const session = await seed('Legacy', 2)
+    const result = await verifySession(root, session.id)
+
+    assert.equal(result.intact, false)
+    assert.equal(result.unverified.length, 2)
+    assert.deepEqual(result.modified, [], 'no digest is not the same as a wrong digest')
+  })
+
+  test('the undo copies are not part of the check', async () => {
+    // They are working files, not evidence: they are in no export, and a
+    // missing one means "cannot revert", not "something is wrong".
+    const session = await seed('Undo', 1)
+    session.steps[0].sha256 = await hashAsset(root, session.id, session.steps[0].file)
+    await saveSession(root, session)
+    await writeAsset(root, session.id, originalName(session.steps[0].file), bytes(32, 3))
+
+    const result = await verifySession(root, session.id)
+    assert.equal(result.intact, true)
+    assert.equal(result.checked, 1)
+  })
+
+  test('a session that is not there verifies as nothing rather than throwing', async () => {
+    assert.equal(await verifySession(root, 's-nope-nope'), null)
   })
 })

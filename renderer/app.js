@@ -12,6 +12,7 @@
 import { $, all, el, icon, toast, mmss, humanBytes, thumbnail, markCursor, burnKeys } from './ui.js'
 import { newSession, addStep, addMedia, summarise } from '../lib/session.js'
 import { describe as describeKey, fold, expire } from '../lib/keys.js'
+import { digest } from '../lib/manifest.js'
 import { mountCapture } from './view-capture.js'
 import { mountRecord } from './view-record.js'
 import { mountLibrary } from './view-library.js'
@@ -162,7 +163,18 @@ export async function storeShot(shot) {
     capturedAt: Date.now(),
     cursor: shot.cursor,
     source: shot.source,
-    meta: settings.metadata ? shot.meta : null
+    meta: settings.metadata ? shot.meta : null,
+    from: shot.from || null,
+    /**
+     * Hashed here, after the ring and the caps and before anything else can
+     * touch it — these bytes are the ones written to disk.
+     *
+     * At capture rather than at export, deliberately. A digest taken while
+     * building a pack certifies the file as it is at that moment, which is
+     * after any alteration would already have happened; taken here it is a
+     * record of what came out of the camera.
+     */
+    sha256: settings.hashAssets ? await digest(png) : null
   })
 
   // The full-size PNG and the grid's copy, written together — a step whose
@@ -227,20 +239,26 @@ function shutter() {
   }
 }
 
-export async function storeRecording({ blob, container, mimeType, width, height, durationMs, source, audio: tracks }) {
+export async function storeRecording({
+  blob, container, mimeType, width, height, durationMs, source, audio: tracks,
+  marks = [], pauses = []
+}) {
   const session = await ensureSession()
+  const bytes = new Uint8Array(await blob.arrayBuffer())
   const entry = addMedia(session, {
     container, mimeType, width, height, durationMs,
     bytes: blob.size,
     startedAt: state.recording.startedAt || Date.now(),
     source,
-    audio: tracks
+    audio: tracks,
+    sha256: state.settings.hashAssets ? await digest(bytes) : null,
+    // Kept with the recording rather than consumed now, so steps can be pulled
+    // out of it later — after watching it back, or on a second pass — instead
+    // of only in the moment the take ended.
+    marks,
+    pauses
   })
-  await api.library.writeAsset({
-    sessionId: session.id,
-    name: entry.file,
-    data: new Uint8Array(await blob.arrayBuffer())
-  })
+  await api.library.writeAsset({ sessionId: session.id, name: entry.file, data: bytes })
   await persist()
   return entry
 }
@@ -307,7 +325,18 @@ const VIEWS = {
 
 const mounted = new Map()
 
-export function go(name) {
+/**
+ * Switch views, optionally naming what to land on.
+ *
+ * `focus` is passed straight through to the view's `enter`. It exists because
+ * "go to the library" and "go to the library and show me the recording I just
+ * made" are different requests, and the second one is what finishing a take
+ * actually means — arriving at a list and having to work out which row is the
+ * new one is most of the way back to not having been taken there at all.
+ *
+ * A view that does not care about it ignores the argument.
+ */
+export function go(name, focus) {
   if (!VIEWS[name]) return
   state.view = name
 
@@ -324,14 +353,14 @@ export function go(name) {
     const view = VIEWS[name]({ root, api, state })
     mounted.set(name, { root, ...view })
   }
-  mounted.get(name).enter?.()
+  mounted.get(name).enter?.(focus)
   changed()
 }
 
 /** Views ask for a repaint after something they do not own has changed. */
-export function refreshView(name) {
+export function refreshView(name, focus) {
   const view = mounted.get(name || state.view)
-  view?.enter?.()
+  view?.enter?.(focus)
 }
 
 /* ────────────────────────────────────────────────────────────────── boot */

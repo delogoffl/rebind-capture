@@ -468,6 +468,24 @@ let hookError = null
 let recordingLive = false
 
 /**
+ * The input stream a take is collecting, for turning it into steps.
+ *
+ * A separate reason to run the hook from the keypress HUD, and deliberately so:
+ * one draws keys into the picture and the other never leaves this process until
+ * the take ends. They can be on independently, so the hook's lifetime is the
+ * union of the two and neither switch can silently turn the other off.
+ *
+ * Nothing here is written to disk by main. It is handed to the renderer at
+ * stop, which stores it beside the recording — the same rule as everywhere else
+ * in this app, that exactly one process owns the library.
+ */
+let marksLive = false
+let marks = []
+
+/** Above this a take has stopped being documentation and become a keylogger. */
+const MAX_MARKS = 4000
+
+/**
  * The strip as the overlay last drew it.
  *
  * The overlay owns the folding and the expiry, so it is the only thing that
@@ -494,6 +512,7 @@ async function startHook() {
   if (hookRunning) return true
   try {
     api.uIOhook.on('keydown', onGlobalKey)
+    api.uIOhook.on('mousedown', onGlobalClick)
     api.uIOhook.start()
     hookRunning = true
   } catch (err) {
@@ -507,6 +526,7 @@ function stopHook() {
   if (!hookRunning || !hook) return
   try {
     hook.uIOhook.off('keydown', onGlobalKey)
+    hook.uIOhook.off('mousedown', onGlobalClick)
     hook.uIOhook.stop()
   } catch { /* already gone */ }
   hookRunning = false
@@ -520,6 +540,20 @@ function stopHook() {
  * main process's only job is to be the thing that can see the event at all.
  */
 function onGlobalKey(event) {
+  // Recorded for step extraction whether or not the HUD is on: these two
+  // features share a hook, not a switch.
+  if (marksLive && marks.length < MAX_MARKS) {
+    marks.push({
+      at: Date.now(),
+      kind: 'key',
+      keycode: event.keycode,
+      shiftKey: Boolean(event.shiftKey),
+      ctrlKey: Boolean(event.ctrlKey),
+      altKey: Boolean(event.altKey),
+      metaKey: Boolean(event.metaKey)
+    })
+  }
+
   if (!current.keypress) return
   send(keysWin, 'keys:down', {
     keycode: event.keycode,
@@ -532,6 +566,25 @@ function onGlobalKey(event) {
   // The app's own window draws the settings preview from the same events, so
   // what you configure is what you are watching.
   send(win, 'keys:down', { keycode: event.keycode, at: Date.now() })
+}
+
+/**
+ * A click somewhere on the machine, during a take.
+ *
+ * Only collected while a recording is running — there is no HUD for clicks and
+ * no other consumer, so outside a take this handler does nothing at all. The
+ * screen coordinates come along because a step extracted from a click is much
+ * more useful with a marker where the click landed than without one.
+ */
+function onGlobalClick(event) {
+  if (!marksLive || marks.length >= MAX_MARKS) return
+  marks.push({
+    at: Date.now(),
+    kind: 'click',
+    x: event.x,
+    y: event.y,
+    button: event.button || 1
+  })
 }
 
 /**
@@ -605,24 +658,40 @@ function createKeysWindow() {
 const wantKeys = () =>
   Boolean(current.keypress) && (current.keypressWhen === 'always' || recordingLive)
 
+/**
+ * The hook runs if *either* feature needs it.
+ *
+ * Two independent reasons — drawing keys into the picture, and collecting
+ * actions to cut a recording into steps — and one hook. Deriving its lifetime
+ * from the union rather than from whichever feature was wired first is what
+ * stops turning the HUD off from silently disabling step extraction.
+ */
+const wantHook = () => wantKeys() || marksLive
+
 async function syncKeypress() {
+  // One start for both reasons — the HUD may be off entirely while a take is
+  // still collecting marks, and then there is a hook to run but no overlay.
+  const started = wantHook() ? await startHook() : false
+
+  if (wantKeys() && !started) {
+    // The setting cannot stay on if the thing it needs did not load, or the
+    // switch is claiming something untrue.
+    current = await saveSettings({ ...current, keypress: false })
+    send(win, 'settings:changed', current)
+    send(win, 'keys:unavailable', { reason: hookError || 'The input hook is unavailable.' })
+    return
+  }
+
   if (wantKeys()) {
-    const ok = await startHook()
-    if (!ok) {
-      // The setting cannot stay on if the thing it needs did not load, or the
-      // switch is claiming something untrue.
-      current = await saveSettings({ ...current, keypress: false })
-      send(win, 'settings:changed', current)
-      send(win, 'keys:unavailable', { reason: hookError || 'The input hook is unavailable.' })
-      return
-    }
     const window = createKeysWindow()
     coverDisplay(window)
     window.showInactive()
     window.setAlwaysOnTop(true, 'screen-saver')
     send(window, 'keys:config', current)
   } else {
-    stopHook()
+    // The overlay goes whenever the HUD is not wanted, but the hook itself only
+    // stops when nothing else is still using it.
+    if (!wantHook()) stopHook()
     if (keysWin && !keysWin.isDestroyed()) keysWin.hide()
   }
 }
@@ -1121,6 +1190,43 @@ function handlers() {
   })
   ipcMain.on('keys:report', (_e, caps) => { keysSnapshot = caps })
 
+  /* ── what a take saw, for cutting it into steps ── */
+
+  /**
+   * Start collecting.
+   *
+   * Answers whether it actually can, rather than failing silently: without the
+   * hook there are no marks, and the record view needs to know that so it can
+   * say so instead of offering a button that will find nothing.
+   */
+  ipcMain.handle('marks:start', async () => {
+    marks = []
+    marksLive = true
+    await syncKeypress()
+    if (!hookRunning) {
+      marksLive = false
+      return { collecting: false, reason: hookError || 'The input hook is unavailable.' }
+    }
+    return { collecting: true }
+  })
+
+  /** Stop, and hand over what was seen. Collected marks do not outlive the take. */
+  ipcMain.handle('marks:stop', async () => {
+    const seen = marks
+    marks = []
+    marksLive = false
+    await syncKeypress()
+    return seen
+  })
+
+  /** Throw away what has been collected without waiting for a stop. */
+  ipcMain.handle('marks:discard', async () => {
+    marks = []
+    marksLive = false
+    await syncKeypress()
+    return true
+  })
+
   ipcMain.handle('region:done', (_e, result) => finishRegion(result))
   ipcMain.handle('region:cancel', () => finishRegion(null))
   ipcMain.handle('region:displays', () => screen.getAllDisplays().map((d) => ({
@@ -1153,6 +1259,19 @@ function handlers() {
   ipcMain.handle('library:removeAsset', async (_e, { sessionId, name }) => {
     await ready
     return lib.store.removeAsset(libraryRoot(), sessionId, name)
+  })
+
+  /**
+   * Re-hash a session's files and compare against what was recorded.
+   *
+   * Deliberately in main rather than the renderer: it reads every asset in the
+   * session, and streaming several hundred megabytes of video through IPC so
+   * the page can hash it would be slower and pointless — the answer is a
+   * verdict, not the bytes.
+   */
+  ipcMain.handle('library:verify', async (_e, id) => {
+    await ready
+    return lib.store.verifySession(libraryRoot(), id)
   })
   ipcMain.handle('library:delete', async (_e, id) => {
     await ready

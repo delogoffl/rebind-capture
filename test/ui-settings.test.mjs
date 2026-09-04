@@ -103,7 +103,11 @@ describe('no setting is dead', () => {
     // entirely by them, and leaving it out of this list would report five live
     // settings as dead.
     'windows/keys.js',
-    'windows/bar.js'
+    'windows/bar.js',
+    // The annotation editor is opened by the library but owns its own defaults,
+    // so the colour and stroke settings are read here rather than there.
+    'renderer/editor.js',
+    'renderer/annotate-draw.js'
   ]
 
   test('every setting is read by something other than the settings page', () => {
@@ -576,7 +580,24 @@ describe('deleting a capture', () => {
     const text = library()
     assert.match(text, /el\('button\.shot-del'/,
       'alt-click had nothing on screen to suggest it existed')
-    assert.ok(!/event\.altKey/.test(text), 'the gesture is replaced, not merely supplemented')
+
+    /**
+     * Scoped to the step-tile code, not the whole file.
+     *
+     * This was a bare `!/event\.altKey/` over the entire module — a fair
+     * shorthand when the only modifier key in here was the delete gesture, and
+     * wrong as soon as anything else had a reason to read one. The video
+     * player added `if (event.ctrlKey || event.metaKey || event.altKey) return`
+     * so a system shortcut is not swallowed by its own keyboard handling, and
+     * that tripped an assertion about deleting captures.
+     *
+     * What the test means is that a step is not deleted by a modified click,
+     * so that is what it now asks.
+     */
+    const tile = text.slice(text.indexOf('async function paintShots'), text.indexOf('function toggleAll'))
+    assert.ok(tile.length > 200, 'the step grid moved — rescope this assertion')
+    assert.ok(!/altKey|metaKey|ctrlKey/.test(tile),
+      'the gesture is replaced, not merely supplemented')
   })
 
   test('the tile is not a button, so the delete inside it can be one', () => {
@@ -608,11 +629,24 @@ describe('confirming an irreversible delete', () => {
   })
 
   test('all three deletes ask in a dialog', () => {
+    /**
+     * Scoped to the three delete functions rather than counting every
+     * `confirm` in the file.
+     *
+     * A raw count was the original assertion, and it broke the moment a
+     * non-delete action grew its own confirmation — which made the test a
+     * report about how many dialogs the file has rather than about whether the
+     * irreversible things ask before doing them.
+     */
     const text = library()
-    assert.equal((text.match(/await confirm\(\{/g) || []).length, 3,
-      'a step, a recording and a session are each irreversible')
-    // And each one has to be able to answer "no".
-    assert.equal((text.match(/if \(!ok\) return/g) || []).length, 3)
+    for (const name of ['removeStep', 'removeTape', 'doDeleteSession']) {
+      const start = text.indexOf(`async function ${name}(`)
+      assert.ok(start > 0, `${name} is gone`)
+      const body = text.slice(start, text.indexOf('\n  }', start))
+      assert.match(body, /await confirm\(\{/, `${name} deletes without asking`)
+      // And each one has to be able to answer "no".
+      assert.match(body, /if \(!ok\) return/, `${name} ignores the answer`)
+    }
   })
 
   test('the dialog says what will actually be lost', () => {
@@ -645,6 +679,65 @@ describe('confirming an irreversible delete', () => {
  * assert the writing end — that the editors exist and write the field the
  * export reads — and `export.test.mjs` asserts the reading end.
  */
+/**
+ * What the renderer is allowed to import.
+ *
+ * The renderer is sandboxed and its modules are served raw over the `capture://`
+ * scheme — there is no bundler and no Node resolution. A static `import` of a
+ * `node:` builtin therefore fails at load, and because it fails while the module
+ * graph is being built it takes down the *whole view*, not just the one helper
+ * that needed it.
+ *
+ * This is easy to do by accident: `lib/` is shared between main and the
+ * renderer, and most of it is pure, so reaching into `lib/store.js` for one
+ * function looks harmless right up until the Library renders blank. It cost
+ * exactly that here — `originalName` was defined in `store.js` and imported by
+ * the library view — so it gets a test rather than a note.
+ */
+describe('the renderer cannot import Node', () => {
+  const RENDERER = [
+    'renderer/app.js', 'renderer/ui.js', 'renderer/editor.js', 'renderer/annotate-draw.js',
+    'renderer/view-capture.js', 'renderer/view-record.js', 'renderer/view-library.js',
+    'renderer/view-settings.js', 'renderer/watch.js',
+    'windows/keys.js', 'windows/bar.js', 'windows/region.js', 'windows/countdown.js'
+  ]
+
+  /** Static imports only — a dynamic one inside a branch never runs in the page. */
+  const staticImports = (file) => [...code(file).matchAll(/^\s*import\s[\s\S]*?from\s*'([^']+)'/gm)]
+    .map((m) => m[1])
+
+  test('no renderer module statically imports a node: builtin', () => {
+    for (const file of RENDERER) {
+      for (const target of staticImports(file)) {
+        assert.ok(!target.startsWith('node:'), `${file} imports ${target}`)
+      }
+    }
+  })
+
+  test('nor anything that does, transitively', () => {
+    // One hop is enough: `lib/` is flat, and the modules the renderer reaches
+    // for are the ones that would drag `node:fs` in with them.
+    const offenders = new Set()
+    for (const file of ['lib/store.js', 'lib/settings.js']) {
+      if (staticImports(file).some((t) => t.startsWith('node:'))) offenders.add(file)
+    }
+    assert.ok(offenders.has('lib/store.js'), 'store.js reads the filesystem; if it stopped, update this list')
+
+    for (const file of RENDERER) {
+      for (const target of staticImports(file)) {
+        const resolved = target.replace(/^\.\.\//, '').replace(/^\.\//, 'renderer/')
+        assert.ok(!offenders.has(resolved), `${file} imports ${target}, which imports node:`)
+      }
+    }
+  })
+
+  test('the shared helper lives where both sides can reach it', () => {
+    // The fix, pinned: pure enough for the page, re-exported for the store.
+    assert.match(code('lib/session.js'), /export const originalName/)
+    assert.match(code('lib/store.js'), /export \{ originalName \}/)
+  })
+})
+
 describe('editing the names an export prints', () => {
   const library = () => code('renderer/view-library.js')
 

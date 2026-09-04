@@ -17,10 +17,45 @@
 
 import { el, icon, toast, mmss, humanBytes, drawCaps } from './ui.js'
 import { watchSources } from './watch.js'
-import { state, storeRecording, setPhase, elapsed, go, refreshView } from './app.js'
+import { state, storeRecording, setPhase, elapsed, go } from './app.js'
+import { planSteps } from '../lib/marks.js'
 
 /** Best first; the first the engine admits to supporting wins. */
-const CONTAINERS = [
+/**
+ * Containers, and why there are two lists.
+ *
+ * A codec string is a promise about what the file will contain, and asking the
+ * muxer for an audio codec when the stream has no audio track is a promise
+ * that cannot be kept. What comes out still plays start to finish, so it looks
+ * fine — but it cannot be *seeked*: `currentTime` reports the position you
+ * asked for while the decoder goes on presenting an earlier frame.
+ *
+ * That is not a theory. Recording the same four-second clip ten ways and
+ * seeking to four known moments in each (`test/seek-probe.mjs`):
+ *
+ *   video/mp4;codecs=avc1.42E01E,mp4a.40.2   no audio track   2 of 4 wrong
+ *   video/mp4;codecs=avc1.42E01E,mp4a.40.2   with audio       correct
+ *   video/mp4;codecs=avc1.42E01E             either           correct
+ *   video/mp4                                either           correct
+ *   every video/webm variant                 either           correct
+ *
+ * Exactly one combination is broken, and it was the app's default: mp4 with
+ * the pinned codec string is first here, and `recordAudio` and `recordMic` are
+ * both off out of the box. So every recording anyone made without turning
+ * audio on could not be scrubbed and could not have a frame pulled out of it —
+ * which is what made extracting steps return the same picture twice.
+ *
+ * The audio codec is therefore named only when there is audio to put in it.
+ */
+const VIDEO_ONLY = [
+  { mimeType: 'video/mp4;codecs=avc1.42E01E', ext: 'mp4' },
+  { mimeType: 'video/mp4', ext: 'mp4' },
+  { mimeType: 'video/webm;codecs=vp9', ext: 'webm' },
+  { mimeType: 'video/webm;codecs=vp8', ext: 'webm' },
+  { mimeType: 'video/webm', ext: 'webm' }
+]
+
+const WITH_AUDIO = [
   { mimeType: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
   { mimeType: 'video/mp4', ext: 'mp4' },
   { mimeType: 'video/webm;codecs=vp9,opus', ext: 'webm' },
@@ -28,8 +63,18 @@ const CONTAINERS = [
   { mimeType: 'video/webm', ext: 'webm' }
 ]
 
-function pickContainer() {
-  for (const candidate of CONTAINERS) {
+/**
+ * The best container for the stream that actually exists.
+ *
+ * `hasAudio` is read off the assembled stream rather than off the settings:
+ * system audio can be asked for and refused (the loopback does not attach to a
+ * window source on Windows), and the microphone can be missing. Both fall back
+ * to recording without audio, and the settings still say it was wanted — so
+ * trusting them here would name an audio codec for a stream that has no audio
+ * track, which is the case above that cannot be seeked.
+ */
+function pickContainer(hasAudio) {
+  for (const candidate of hasAudio ? WITH_AUDIO : VIDEO_ONLY) {
     if (MediaRecorder.isTypeSupported?.(candidate.mimeType)) return candidate
   }
   return { mimeType: '', ext: 'webm' }
@@ -194,6 +239,23 @@ export function mountRecord({ root, api }) {
   let barTicker = 0
   /** Stops the compositor's animation frame, when there is one. */
   let cleanupComposite = null
+  /**
+   * When the take was paused, as ranges rather than a total.
+   *
+   * The video contains no paused time, so placing a click in it needs to know
+   * how much pausing happened *before that click* — which a running total
+   * cannot answer once the take is over.
+   */
+  let pauses = []
+  /** Whether the hook actually armed, so a failure is not silently a no-op. */
+  let collecting = false
+  /**
+   * Where to go once the take is saved and the window is back.
+   *
+   * Set only when a recording actually produced a file, so a take that failed
+   * leaves the user on the screen they can retry from.
+   */
+  let landing = null
 
   /**
    * Open the stream.
@@ -329,11 +391,28 @@ export function mountRecord({ root, api }) {
       // armed here so the strip is live from the first frame, and disarmed in
       // `finish` however the take ends.
       if (state.settings.keypress) await api.keys.recording(true)
+
+      // Armed alongside the HUD but independently of it: this collects the
+      // clicks and keys that a recording is later cut into steps at, and it
+      // has to be running before the first frame or the first action is lost.
+      pauses = []
+      collecting = false
+      if (state.settings.autoSteps) {
+        const armed = await api.marks.start()
+        collecting = Boolean(armed?.collecting)
+        // Not a reason to refuse to record — it is the difference between a
+        // recording you can extract steps from and an ordinary one.
+        if (!collecting && armed?.reason) {
+          toast(`Steps cannot be extracted from this take: ${armed.reason}`, { tone: 'warn' })
+        }
+      }
+
       stream = await openStream(chosen)
       const track = stream.getVideoTracks()[0]
       const trackSettings = track.getSettings()
       dims = { width: trackSettings.width || 0, height: trackSettings.height || 0 }
-      container = pickContainer()
+      // From the stream, not the settings — audio can be asked for and refused.
+      container = pickContainer(stream.getAudioTracks().length > 0)
 
       chunks = []
       recorder = new MediaRecorder(stream, {
@@ -389,6 +468,10 @@ export function mountRecord({ root, api }) {
     } catch (err) {
       cleanup()
       await api.keys.recording(false)
+      // A take that never started has nothing to extract, and leaving the hook
+      // armed would keep it running for the life of the app.
+      await api.marks.discard().catch(() => {})
+      collecting = false
       await api.count.hide()
       await api.app.comeBack()
       setPhase('ready')
@@ -401,6 +484,11 @@ export function mountRecord({ root, api }) {
     if (recorder?.state !== 'recording') return
     recorder.pause()
     state.recording.pausedAt = Date.now()
+    // Recorded as a range, not just a total. Turning a click's timestamp into
+    // a position in the video needs to know how much paused time came *before
+    // that click* — a single total cannot answer that, and getting it wrong
+    // puts every step after the first pause on the wrong frame.
+    pauses.push({ from: state.recording.pausedAt })
     setPhase('paused')
     pushBar()
     paint()
@@ -411,6 +499,8 @@ export function mountRecord({ root, api }) {
     recorder.resume()
     state.recording.pausedMs += state.recording.pausedAt ? Date.now() - state.recording.pausedAt : 0
     state.recording.pausedAt = 0
+    const open = pauses[pauses.length - 1]
+    if (open && !open.to) open.to = Date.now()
     setPhase('recording')
     pushBar()
     paint()
@@ -430,6 +520,14 @@ export function mountRecord({ root, api }) {
     // Stops the hook when the default 'recording' mode is in force; a no-op
     // when the user has asked for it always.
     await api.keys.recording(false)
+    // Always asked for, even when collecting never started, because this is
+    // also what disarms the hook's other reason for running.
+    const seen = await api.marks.stop().catch(() => [])
+    // A take stopped while paused leaves the last range open, and an open range
+    // swallows every mark after it.
+    const open = pauses[pauses.length - 1]
+    if (open && !open.to) open.to = Date.now()
+
     const blob = new Blob(chunks, { type: container?.mimeType || 'video/webm' })
     chunks = []
     cleanup()
@@ -444,12 +542,36 @@ export function mountRecord({ root, api }) {
         height: dims.height,
         durationMs,
         source: { id: chosen, kind: state.settings.recordSource },
-        audio: { system: state.settings.recordAudio, mic: state.settings.recordMic }
+        audio: { system: state.settings.recordAudio, mic: state.settings.recordMic },
+        marks: collecting ? seen : [],
+        pauses
       })
-      toast(`Recording saved · ${mmss(durationMs)} · ${humanBytes(entry.bytes)}`, {
-        action: 'Library', onAction: () => go('library')
+
+      // The extraction itself is never automatic — sixty steps appearing in the
+      // library unasked is not a feature — so the offer is made here and the
+      // work happens in the library, where the results are visible.
+      const plan = collecting
+        ? planSteps(seen, { startedAt: entry.startedAt, durationMs, pauses }, {
+            max: state.settings.autoStepsMax,
+            ...(state.settings.autoStepsOn === 'clicks' ? { clicksOnly: true } : null)
+          })
+        : []
+
+      const extra = plan.length
+        ? ` · ${plan.length} step${plan.length === 1 ? '' : 's'} available`
+        : ''
+
+      // Where to land, once the window is back. Not navigated to here: the app
+      // may still be minimised at this point, and scrolling a row into view on
+      // a hidden window is measuring a layout nobody is looking at.
+      landing = { sessionId: state.session?.id, mediaId: entry.id }
+
+      // "Record again" rather than "Library", because the library is where
+      // this is about to be. The one-click way back matters more to someone
+      // taking several takes than a button pointing at the current screen.
+      toast(`Recording saved · ${mmss(durationMs)} · ${humanBytes(entry.bytes)}${extra}`, {
+        action: 'Record again', onAction: () => go('record')
       })
-      refreshView('library')
     } catch (err) {
       toast(String(err?.message || err), { tone: 'bad' })
     } finally {
@@ -460,6 +582,30 @@ export function mountRecord({ root, api }) {
       // the user can see it. Only if this put it away in the first place.
       await api.app.comeBack()
       paint()
+
+      /**
+       * A finished take ends in the library, on the take.
+       *
+       * Recording is a bounded thing: it starts, it runs, it stops, and what
+       * you wanted was the file. Landing back on the Record view — the screen
+       * for setting up a recording that has just happened — meant the app put
+       * itself away, gave you the screen, took the recording, and then
+       * returned you to the one place with nothing to show for it. It was
+       * already saved and already listed; seeing it just took two more clicks.
+       *
+       * Screenshots deliberately do not do this. A capture is a repeated
+       * action — eight shots of the same flow is the normal case — and being
+       * pulled out of the Capture view after every shutter would be a worse
+       * version of this same complaint.
+       *
+       * After `comeBack`, so the library lays out and scrolls against a window
+       * that is actually on screen. Only on a take that produced something: a
+       * failed recording should leave you where you can try again.
+       */
+      if (landing) {
+        go('library', landing)
+        landing = null
+      }
     }
   }
 

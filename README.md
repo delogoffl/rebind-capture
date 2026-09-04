@@ -17,7 +17,9 @@ codec are all in this repository.
 npm start              run it
 npm run dev            run it with devtools
 npm run icons          re-derive the app icons from icon/iconmain.png
-npm test               99 tests, plain Node, no Electron needed
+npm test               318 tests, plain Node, no Electron needed
+npm run probe          drive the real app in Electron: annotate, hash, extract, play
+npm run probe:seek     measure how each container survives being seeked
 npm run shots          screenshot every view, both themes, into shots/
 npm run dist           package installers for this platform
 ```
@@ -35,12 +37,22 @@ npm run dist           package installers for this platform
   closed. Bound by pressing the keys, not by typing an accelerator string.
 - **Record** — a display or one window, at a frame rate and bitrate you choose,
   with system audio and narration mixed into the same file. MP4 where the engine
-  supports it, WebM otherwise, negotiated rather than assumed.
+  supports it, WebM otherwise, negotiated rather than assumed — and the codec
+  string is chosen from what the stream actually holds. Naming an audio codec
+  for a silent recording produces a file at half the byte count that reports
+  seek positions it cannot honour, which is measured in `npm run probe:seek`.
 - **The floating transport** — elapsed time, pause, resume and stop, always on
   top and on every workspace, and **excluded from the recording it controls**.
 - **Library** — one folder per session on disk, with a readable index beside the
   images. Steps and recordings are selected separately, and each recording has
-  its own one-click save.
+  its own one-click save. A finished recording lands here, on the take it just
+  made, rather than back on the screen for setting one up.
+- **The player** — its own chrome rather than the browser's, because the
+  browser's cannot say anything about what it is playing. The clicks and
+  keystrokes a recording captured are drawn as ticks along the scrubber, so the
+  timeline is a map of the take: dense where the work was, empty where you were
+  reading. Clicking a tick jumps to that action, and the same plan that draws
+  them is the one that cuts the steps.
 - **Export** — PDF (one step per page, hand-written writer), PNG (one file or a
   zip), Markdown (a report plus the images, with YAML front matter), and the
   recordings.
@@ -51,26 +63,46 @@ npm run dist           package installers for this platform
   password into one, and whoever reads that file later is not necessarily
   whoever took it — masking keeps the evidence that typing happened, and its
   length, without the content.
-- **Settings** — all twenty-seven of them, in seven sections with a jump list. Not
+- **The annotator** — boxes, arrows, highlights, numbered markers and
+  **redaction**, burnt into the pixels rather than kept as a layer this app's
+  viewer knows how to draw. A redaction fills the region with opaque black and
+  **deletes the untouched copy**: a blur drawn as a layer is recoverable from
+  the file underneath, which in an evidence tool is a data breach rather than a
+  feature. Every other mark keeps that copy, so it can be taken back off. The
+  editor says which of the two you are about to do, at the moment it becomes
+  true.
+- **Suggested marks** — open the editor on a step and it offers dashed boxes
+  around whatever changed since the step before it. Placing the box is the part
+  of writing documentation people skip. It is a suggestion and never an edit: a
+  box that silently lands on the wrong thing is worse than no box in a document
+  somebody is about to attach to a ticket.
+- **Integrity manifests** — every capture is hashed as it is written, and zip
+  exports carry a `manifest.json` and a `SHA256SUMS` a recipient can check with
+  `sha256sum -c`. The Markdown report quotes the manifest's own digest, so
+  altering an image breaks its entry and altering the entry breaks the report.
+  **Verify** in the library re-hashes a session against what was recorded. This
+  proves nothing about where a screenshot came from — no offline tool can — but
+  it makes alteration after export visible, which is the claim being made.
+- **Steps from a recording** — the input hook that draws the keypress HUD also
+  records *when* each click and keystroke happened. Ask for it afterwards and
+  each action becomes a numbered capture, taken from the frame just before it,
+  so one recording becomes a step-by-step document. Never automatic: it is a
+  button, it says how many steps it will make, and it asks first.
+- **Settings** — all thirty-five of them, in seven declared sections with a jump list. Not
   a subset: a test walks the page's spec against the defaults in both directions
   and fails if a setting has nowhere to be changed, or if a row changes
   something that does not exist.
 
 Not built yet:
 
-- **The annotator.** Step markers, arrows, boxes, text and redaction. The
-  library view is the surface it goes on. The intended rule when it lands:
-  **redaction must be destructive** — a blur drawn as a layer is recoverable from
-  the file underneath, which in an evidence tool is a data breach, not a feature.
-  `session.json` already carries an `annotations` array per step, and the
-  Markdown report already counts redactions.
-- **Automatic click-by-click capture.** The keyboard is hooked, but the mouse is
-  not: a click on its own is not evidence without knowing what was under it, and
-  that needs the window tree, not just the pointer. Global shortcuts cover the
-  ground in the meantime.
-- **Trimming a recording.** You can choose which takes to export, not which
-  seconds of one. That needs a real timeline, and it belongs beside the
-  annotator.
+- **Trimming a recording.** You can choose which takes to export, and now which
+  frames to pull out as steps, but not which seconds of one to keep. That needs
+  a real timeline.
+- **Region recording.** Capture offers a dragged rectangle; Record offers a
+  display or a window only.
+- **Reordering steps.** They are numbered in the order they were captured, and
+  a step extracted from a recording lands in the order it happened. Neither can
+  be dragged into a different one.
 
 ---
 
@@ -85,9 +117,16 @@ lib/              pure ESM — no Electron, no DOM, all of it unit-tested
   settings.js     defaults, clamping, and accelerator validation
   export.js       what an export consists of and what it is called
   report.js       the Markdown report and its front matter
+  manifest.js     digests, the integrity manifest, and verifying one
+  annotate.js     the mark model: kinds, geometry, what is worth keeping
+  diff.js         what changed between two captures, as rectangles
+  marks.js        turning a take's input stream into a step-extraction plan
+  keys.js         the keycap model for the HUD
   pdf.js          a PDF writer, ~250 lines, JPEG via /DCTDecode
   zip.js          a store-only ZIP writer
 renderer/         the app UI, four views, one design system
+  editor.js       the annotation editor, and burning marks into a PNG
+  annotate-draw.js  one canvas renderer, shared by the editor and the burn-in
 windows/
   bar.html/js     the floating transport
   region.html/js  the drag-out overlay, one per display
@@ -254,7 +293,8 @@ path and opens it — one folder per session:
 ```
 <library>/<session id>/
   session.json          the index, readable and hand-editable
-  step-001.png          the capture, with the pointer ring burnt in
+  step-001.png          the capture, with the pointer ring and any marks burnt in
+  step-001.orig.png     the untouched copy, kept unless a redaction removed it
   step-001.thumb.png    the 480px copy the grid reads
   rec-01.mp4            a recording
 ```

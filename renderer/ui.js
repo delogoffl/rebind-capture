@@ -29,7 +29,7 @@ export function el(tag, props = {}, kids = []) {
     if (key === 'text') node.textContent = String(value)
     else if (key === 'html') throw new Error('el() does not take html — build nodes')
     else if (key === 'dataset') Object.assign(node.dataset, value)
-    else if (key === 'style') Object.assign(node.style, value)
+    else if (key === 'style') setStyle(node, value)
     else if (key.startsWith('on') && typeof value === 'function') {
       node.addEventListener(key.slice(2).toLowerCase(), value)
     } else if (key in node && key !== 'title' && typeof value !== 'object') {
@@ -44,6 +44,24 @@ export function el(tag, props = {}, kids = []) {
     node.append(typeof kid === 'string' ? document.createTextNode(kid) : kid)
   }
   return node
+}
+
+/**
+ * Styles, including custom properties.
+ *
+ * `Object.assign(node.style, ...)` is the obvious way to do this and it drops
+ * anything beginning with `--` on the floor — silently, because a CSSStyleDeclaration
+ * has no such property to assign to and assigning an unknown key to it is not
+ * an error. A rule reading `var(--swatch)` then resolves to nothing, so the
+ * element renders with no background at all and looks like a CSS mistake rather
+ * than a JavaScript one. Custom properties need `setProperty`.
+ */
+function setStyle(node, styles) {
+  for (const [key, value] of Object.entries(styles)) {
+    if (value === undefined || value === null) continue
+    if (key.startsWith('--')) node.style.setProperty(key, String(value))
+    else node.style[key] = value
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────── icons */
